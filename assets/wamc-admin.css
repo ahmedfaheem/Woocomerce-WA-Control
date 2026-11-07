@@ -1,0 +1,295 @@
+/* ═══════════════════════════════════════════════════════════════
+   WA Meta Control — Admin Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
+
+.wamc-settings-wrap,
+.wamc-settings-wrap * {
+    font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+    direction: rtl;
+    text-align: right;
+    box-sizing: border-box;
+}
+
+/* ── Page Title ─────────────────────────────────────────────────────── */
+.wamc-page-title {
+    font-size: 26px;
+    font-weight: 700;
+    color: #1a1a1a;
+    margin: 20px 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────── */
+.wamc-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.wamc-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 24px 28px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05);
+    transition: box-shadow .2s;
+}
+.wamc-card:hover {
+    box-shadow: 0 4px 18px rgba(0,0,0,.09);
+}
+
+.wamc-card-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #1a1a1a;
+    margin: 0 0 18px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #f0f0f0;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────── */
+.wamc-table th {
+    font-weight: 600;
+    color: #444;
+    width: 240px;
+    padding: 10px 0;
+    vertical-align: top;
+}
+.wamc-table td {
+    padding: 10px 0;
+    vertical-align: top;
+}
+.wamc-table .description {
+    margin-top: 5px;
+    color: #888;
+    font-size: 12px;
+}
+
+/* ── Webhook row ────────────────────────────────────────────────────── */
+.wamc-webhook-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.wamc-webhook-row input {
+    flex: 1;
+    min-width: 260px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #555;
+    background: #f8f8f8;
+}
+
+/* ── Toggle switch ──────────────────────────────────────────────────── */
+.wamc-toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+    cursor: pointer;
+}
+.wamc-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.wamc-toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: #ccc;
+    border-radius: 26px;
+    transition: .3s;
+}
+.wamc-toggle-slider::before {
+    content: '';
+    position: absolute;
+    height: 20px;
+    width: 20px;
+    right: 3px;
+    bottom: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: .3s;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25);
+}
+.wamc-toggle input:checked + .wamc-toggle-slider {
+    background: #25D366;
+}
+.wamc-toggle input:checked + .wamc-toggle-slider::before {
+    transform: translateX(-24px);
+}
+
+/* ── Save Button ────────────────────────────────────────────────────── */
+.wamc-save-btn {
+    margin-top: 12px !important;
+    padding: 10px 36px !important;
+    font-size: 15px !important;
+    border-radius: 8px !important;
+    background: #25D366 !important;
+    border-color: #1aaf54 !important;
+}
+.wamc-save-btn:hover {
+    background: #1aaf54 !important;
+}
+
+/* ── Nav Tabs ───────────────────────────────────────────────────────── */
+.wamc-nav-tabs {
+    display: flex;
+    gap: 6px;
+    border-bottom: 2px solid #e0e0e0;
+    margin-bottom: 20px;
+}
+.wamc-tab-btn {
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+    transition: all .2s;
+    font-family: inherit;
+}
+.wamc-tab-btn:hover {
+    color: #25D366;
+    background: #f5fff9;
+}
+.wamc-tab-btn.active {
+    color: #25D366;
+    border-bottom-color: #25D366;
+    background: #f5fff9;
+}
+
+/* ── Raw Response / Pre ─────────────────────────────────────────────── */
+.wamc-raw-response {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    padding: 14px;
+    border-radius: 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 300px;
+    overflow-y: auto;
+    margin-top: 12px;
+    direction: ltr;
+    text-align: left;
+}
+
+/* ── Log Table ──────────────────────────────────────────────────────── */
+.wamc-log-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+.wamc-log-table th, .wamc-log-table td {
+    font-size: 13px;
+}
+
+/* ── Status Badges ──────────────────────────────────────────────────── */
+.wamc-status {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.wamc-status-ok            { background: #d4edda; color: #155724; }
+.wamc-status-error         { background: #f8d7da; color: #721c24; }
+.wamc-status-not-found     { background: #fff3cd; color: #856404; }
+.wamc-status-connected     { background: #d4edda; color: #155724; }
+.wamc-status-disconnected  { background: #f8d7da; color: #721c24; }
+.wamc-status-unknown       { background: #e2e3e5; color: #383d41; }
+
+/* ── Service Grid ───────────────────────────────────────────────────── */
+.wamc-service-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 14px;
+    margin-top: 12px;
+}
+.wamc-service-card {
+    background: #f8f8f8;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 13px;
+}
+
+/* ── Anti-Ban Stats Banner ──────────────────────────────────────────── */
+.wamc-antiban-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 16px;
+    background: linear-gradient(135deg, #f0fff4 0%, #e8f5e9 100%);
+    border: 1px solid #c8e6c9;
+    border-radius: 10px;
+}
+.wamc-stat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.wamc-stat-label {
+    font-size: 12px;
+    color: #666;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+.wamc-stat-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a1a1a;
+}
+.wamc-stat-bar {
+    height: 6px;
+    background: #e0e0e0;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 2px;
+}
+.wamc-stat-bar > div {
+    height: 100%;
+    border-radius: 3px;
+    transition: width .5s ease;
+}
+
+/* ── Anti-Ban Tips ──────────────────────────────────────────────────── */
+.wamc-antiban-tips {
+    margin-top: 20px;
+    padding: 16px 20px;
+    background: #fffde7;
+    border: 1px solid #fff176;
+    border-right: 4px solid #f9a825;
+    border-radius: 8px;
+}
+.wamc-antiban-tips h4 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #f57f17;
+}
+.wamc-antiban-tips ul {
+    margin: 0;
+    padding-right: 18px;
+}
+.wamc-antiban-tips li {
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 6px;
+    line-height: 1.5;
+}
