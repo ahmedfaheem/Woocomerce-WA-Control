@@ -112,22 +112,84 @@ class WAMC_Message_Log {
                 'count'     => $count,
                 'pageCount' => $page_count,
                 'page'      => $page . ' / ' . $page_count,
-                'data'      => array_map( fn( $e ) => [
-                    'phonenumber'       => $e['to'],
-                    'text'              => $e['text'],
-                    'status'            => $e['status'],
-                    'delivery'          => $e['error'] ?? '',
-                    'createdAt'         => $e['time'],
-                    'notification_type' => $e['notification_type'] ?? '',
-                    'order_id'          => $e['order_id'] ?? '',
-                    'window_status'     => $e['window_status'] ?? '',
-                    'last_inbound'      => $e['last_inbound'] ?? '',
-                    'msg_type'          => $e['msg_type'] ?? '',
-                    'template_name'     => $e['template_name'] ?? '',
-                    'reason'            => $e['reason'] ?? '',
-                ], $slice ),
+                'data'      => array_map( function ( $e ) {
+                    $oid = $e['order_id'] ?? '';
+                    // Backfill order_id for older received messages if missing
+                    if ( empty( $oid ) && ( $e['dir'] ?? '' ) === 'received' && ! empty( $e['to'] ) && class_exists( 'WAMC_Order_Lookup' ) ) {
+                        $found = WAMC_Order_Lookup::find_latest( (string) $e['to'] );
+                        if ( $found ) {
+                            $oid = $found->get_id();
+                        }
+                    }
+                    return [
+                        'phonenumber'       => $e['to'],
+                        'text'              => $e['text'],
+                        'status'            => $e['status'],
+                        'delivery'          => $e['error'] ?? '',
+                        'error'             => $e['error'] ?? '',
+                        'createdAt'         => $e['time'],
+                        'notification_type' => $e['notification_type'] ?? '',
+                        'order_id'          => $oid,
+                        'window_status'     => $e['window_status'] ?? '',
+                        'last_inbound'      => $e['last_inbound'] ?? '',
+                        'msg_type'          => $e['msg_type'] ?? '',
+                        'template_name'     => $e['template_name'] ?? '',
+                        'sender_user'       => $e['sender_user'] ?? '',
+                        'reason'            => $e['reason'] ?? '',
+                    ];
+                }, $slice ),
             ],
         ];
+    }
+
+    /**
+     * Delete log entries by date range (YYYY-MM-DD to YYYY-MM-DD) or clear all.
+     *
+     * @return int Number of deleted entries.
+     */
+    public static function delete_by_date( string $from_date = '', string $to_date = '', string $dir = 'all' ): int {
+        $all = self::all();
+        if ( empty( $all ) ) {
+            return 0;
+        }
+
+        $from_ts = $from_date !== '' ? strtotime( $from_date . ' 00:00:00' ) : null;
+        $to_ts   = $to_date !== ''   ? strtotime( $to_date . ' 23:59:59' )   : null;
+
+        $kept    = [];
+        $deleted = 0;
+
+        foreach ( $all as $e ) {
+            $entry_dir = $e['dir'] ?? 'sent';
+            if ( $dir !== 'all' && $entry_dir !== $dir ) {
+                $kept[] = $e;
+                continue;
+            }
+
+            if ( $from_ts === null && $to_ts === null ) {
+                // Clear all matching $dir
+                $deleted++;
+                continue;
+            }
+
+            $entry_ts = ! empty( $e['time'] ) ? strtotime( (string) $e['time'] ) : false;
+            if ( ! $entry_ts ) {
+                $kept[] = $e;
+                continue;
+            }
+
+            $match_from = ( $from_ts === null ) || ( $entry_ts >= $from_ts );
+            $match_to   = ( $to_ts === null )   || ( $entry_ts <= $to_ts );
+
+            if ( $match_from && $match_to ) {
+                $deleted++;
+            } else {
+                $kept[] = $e;
+            }
+        }
+
+        update_option( self::OPTION, array_values( $kept ), false );
+        return $deleted;
     }
 
     private static function all(): array {

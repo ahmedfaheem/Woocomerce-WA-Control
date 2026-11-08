@@ -14,6 +14,7 @@ class WAMC_Admin_Page {
         add_action( 'admin_enqueue_scripts',     [ __CLASS__, 'enqueue_assets' ] );
         add_action( 'wp_ajax_wamc_send_test',    [ __CLASS__, 'ajax_send_test' ] );
         add_action( 'wp_ajax_wamc_fetch_log',    [ __CLASS__, 'ajax_fetch_log' ] );
+        add_action( 'wp_ajax_wamc_delete_logs',  [ __CLASS__, 'ajax_delete_logs' ] );
         add_action( 'wp_ajax_wamc_fetch_service',[ __CLASS__, 'ajax_fetch_service' ] );
         add_action( 'wp_ajax_wamc_get_groups',   [ __CLASS__, 'ajax_get_groups' ] );
         add_action( 'wp_ajax_wamc_create_group', [ __CLASS__, 'ajax_create_group' ] );
@@ -114,6 +115,23 @@ class WAMC_Admin_Page {
         }
 
         wp_send_json_success( $result['data'] ?? $result );
+    }
+
+    public static function ajax_delete_logs(): void {
+        check_ajax_referer( 'wamc_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => 'Unauthorized' ] );
+        }
+
+        $from_date = sanitize_text_field( $_POST['from_date'] ?? '' );
+        $to_date   = sanitize_text_field( $_POST['to_date'] ?? '' );
+        $dir       = sanitize_text_field( $_POST['log_type'] ?? 'all' );
+
+        $deleted = WAMC_Message_Log::delete_by_date( $from_date, $to_date, $dir );
+        wp_send_json_success( [
+            'deleted' => $deleted,
+            'message' => sprintf( 'تم حذف %d سجل بنجاح.', $deleted ),
+        ] );
     }
 
     public static function ajax_fetch_service(): void {
@@ -366,21 +384,33 @@ class WAMC_Admin_Page {
             <div class="wamc-tab-panel" id="wamc-tab-log" style="display:none">
                 <div class="wamc-card">
                     <h2 class="wamc-card-title">📋 <?php esc_html_e( 'Message Log', 'wa-meta-control' ); ?></h2>
-                    <div class="wamc-log-toolbar">
-                        <label>
-                            <input type="radio" name="log_type" value="sent" checked />
-                            <?php esc_html_e( 'Sent Messages', 'wa-meta-control' ); ?>
-                        </label>
-                        <label style="margin-right:16px">
-                            <input type="radio" name="log_type" value="received" />
-                            <?php esc_html_e( 'Received Messages', 'wa-meta-control' ); ?>
-                        </label>
-                        <button type="button" id="wamc-btn-load-log" class="button button-secondary">
-                            🔄 <?php esc_html_e( 'Load', 'wa-meta-control' ); ?>
-                        </button>
-                        <span id="wamc-log-pager" style="margin-right:10px"></span>
-                        <button type="button" id="wamc-log-prev" class="button" disabled>◀</button>
-                        <button type="button" id="wamc-log-next" class="button" disabled>▶</button>
+                    <div class="wamc-log-toolbar" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                            <label>
+                                <input type="radio" name="log_type" value="sent" checked />
+                                <?php esc_html_e( 'Sent Messages', 'wa-meta-control' ); ?>
+                            </label>
+                            <label style="margin-right:10px">
+                                <input type="radio" name="log_type" value="received" />
+                                <?php esc_html_e( 'Received Messages', 'wa-meta-control' ); ?>
+                            </label>
+                            <button type="button" id="wamc-btn-load-log" class="button button-secondary">
+                                🔄 <?php esc_html_e( 'تحديث السجل', 'wa-meta-control' ); ?>
+                            </button>
+                            <span id="wamc-log-pager" style="margin-right:6px;font-weight:600"></span>
+                            <button type="button" id="wamc-log-prev" class="button" disabled>◀</button>
+                            <button type="button" id="wamc-log-next" class="button" disabled>▶</button>
+                        </div>
+
+                        <!-- Delete Filter by Date Range -->
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fef2f2;padding:6px 12px;border:1px solid #fecaca;border-radius:6px">
+                            <span style="font-size:12px;font-weight:600;color:#991b1b">🗑️ حذف السجلات من:</span>
+                            <input type="date" id="wamc-log-del-from" style="font-size:12px;padding:2px 6px" />
+                            <span style="font-size:12px;color:#991b1b">إلى:</span>
+                            <input type="date" id="wamc-log-del-to" style="font-size:12px;padding:2px 6px" />
+                            <button type="button" id="wamc-btn-del-range" class="button button-small" style="color:#b91c1c;border-color:#f87171">حذف الفترة</button>
+                            <button type="button" id="wamc-btn-del-all" class="button button-small" style="background:#dc2626;color:#fff;border-color:#dc2626">مسح الكل</button>
+                        </div>
                     </div>
                     <div id="wamc-log-table-wrap">
                         <p style="color:#888"><?php esc_html_e( 'Click Load to fetch messages from the API.', 'wa-meta-control' ); ?></p>
@@ -583,16 +613,30 @@ class WAMC_Admin_Page {
                                 : (msgType === 'template' ? '<span class="wamc-status" style="background:#fff3cd;color:#856404">🔒 قالب' + (row.template_name ? (': <small>'+esc(row.template_name)+'</small>') : '') + '</span>' : '<span style="color:#888">—</span>');
 
                             var st = (row.status || '').toLowerCase();
-                            var stColor = (st === 'delivered' || st === 'read' || st === 'sent') ? '#155724' : (st === 'failed' ? '#721c24' : '#555');
-                            var stBg    = (st === 'delivered' || st === 'read' || st === 'sent') ? '#d4edda' : (st === 'failed' ? '#f8d7da' : '#eee');
+                            var stColor = (st === 'delivered' || st === 'read' || st === 'sent') ? '#155724' : (st === 'failed' || st === 'skipped' ? '#721c24' : '#555');
+                            var stBg    = (st === 'delivered' || st === 'read' || st === 'sent') ? '#d4edda' : (st === 'failed' || st === 'skipped' ? '#f8d7da' : '#eee');
                             var stBadge = '<span class="wamc-status" style="background:'+stBg+';color:'+stColor+'">' + esc(row.status || 'sent') + '</span>';
+
+                            var errText = row.error || row.delivery || '';
+                            var errHtml = '';
+                            if(errText && (st === 'failed' || st === 'skipped')){
+                                errHtml = '<div style="margin-top:5px;padding:4px 8px;background:#fef2f2;border-right:3px solid #ef4444;color:#991b1b;font-size:11px;border-radius:4px">'
+                                        + '⚠️ <strong>سبب الفشل:</strong> ' + esc(errText) + '</div>';
+                            } else if(row.reason && st === 'skipped'){
+                                errHtml = '<div style="margin-top:5px;padding:4px 8px;background:#fffbeb;border-right:3px solid #f59e0b;color:#92400e;font-size:11px;border-radius:4px">'
+                                        + 'ℹ️ ' + esc(row.reason) + '</div>';
+                            }
+
+                            var senderBadge = row.sender_user
+                                ? '<span style="display:inline-block;margin-bottom:4px;margin-left:6px;padding:1px 7px;background:#e0f2fe;color:#0369a1;border-radius:10px;font-size:11px;font-weight:600">👤 بواسطة: ' + esc(row.sender_user) + '</span><br>'
+                                : '';
 
                             html += '<tr>'
                                  + '<td><strong><code>+' + phone + '</code></strong></td>'
                                  + '<td>' + order + '</td>'
                                  + '<td>' + wBadge + '</td>'
                                  + '<td>' + rBadge + '</td>'
-                                 + '<td style="word-break:break-word;font-size:12px;line-height:1.4">' + text + '</td>'
+                                 + '<td style="word-break:break-word;font-size:12px;line-height:1.4">' + senderBadge + text + errHtml + '</td>'
                                  + '<td>' + stBadge + '</td>'
                                  + '<td><span style="color:#666;font-size:12px">' + time + '</span></td>'
                                  + '</tr>';
@@ -607,8 +651,51 @@ class WAMC_Admin_Page {
                 });
             }
             $('#wamc-btn-load-log').on('click', function(){ loadLog(1); });
+            $('input[name="log_type"]').on('change', function(){ loadLog(1); });
+            $('.wamc-tab-btn[data-tab="log"]').on('click', function(){ loadLog(1); });
             $('#wamc-log-prev').on('click', function(){ if(logPage > 1) loadLog(logPage-1); });
             $('#wamc-log-next').on('click', function(){ if(logPage < logPageCount) loadLog(logPage+1); });
+
+            // ── Delete Logs by Date Range or Clear All
+            $('#wamc-btn-del-range').on('click', function(){
+                var from = $('#wamc-log-del-from').val();
+                var to   = $('#wamc-log-del-to').val();
+                if(!from && !to){
+                    alert('يرجى تحديد تاريخ البداية أو النهاية لحذف السجلات.');
+                    return;
+                }
+                if(!confirm('هل أنت متأكد من حذف سجلات الرسائل في الفترة المحددة؟')) return;
+                $.post(ajaxurl, {
+                    action: 'wamc_delete_logs',
+                    nonce: nonce,
+                    from_date: from,
+                    to_date: to,
+                    log_type: 'all'
+                }, function(r){
+                    if(r && r.success){
+                        alert('✓ ' + r.data.message);
+                        loadLog(1);
+                    }
+                });
+            });
+
+            $('#wamc-btn-del-all').on('click', function(){
+                var type = $('input[name="log_type"]:checked').val() || 'all';
+                var typeLbl = type === 'received' ? 'المستقبلة' : 'المرسلة';
+                if(!confirm('هل أنت متأكد من مسح جميع السجلات ' + typeLbl + ' بالكامل؟')) return;
+                $.post(ajaxurl, {
+                    action: 'wamc_delete_logs',
+                    nonce: nonce,
+                    from_date: '',
+                    to_date: '',
+                    log_type: type
+                }, function(r){
+                    if(r && r.success){
+                        alert('✓ ' + r.data.message);
+                        loadLog(1);
+                    }
+                });
+            });
 
             // ── Service Info
             $('#wamc-btn-load-service').on('click', function(){

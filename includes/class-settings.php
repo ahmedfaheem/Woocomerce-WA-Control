@@ -55,6 +55,7 @@ class WAMC_Settings {
         $clean['default_country_code'] = preg_replace( '/\D/', '', $input['default_country_code'] ?? '20' ) ?: '20';
         $clean['template_name']      = sanitize_key( $input['template_name'] ?? '' );
         $clean['template_lang']      = sanitize_text_field( $input['template_lang'] ?? 'ar' );
+        $clean['template_vars']      = sanitize_text_field( $input['template_vars'] ?? '{message}' ) ?: '{message}';
 
         // Pusher Channels Real-Time WebSocket (Zero-Polling Order Chat)
         $clean['pusher_app_id']      = sanitize_text_field( $input['pusher_app_id'] ?? '' );
@@ -342,17 +343,26 @@ class WAMC_Settings {
                                 </td>
                             </tr>
                             <tr>
-                                <th><?php esc_html_e( 'Fallback Template Name', 'wa-meta-control' ); ?></th>
+                                <th><?php esc_html_e( 'Fallback Template Name (قالب شات الأوردر عند إغلاق النافذة)', 'wa-meta-control' ); ?></th>
                                 <td>
-                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[template_name]" value="<?php echo esc_attr( wamc_setting( 'template_name') ); ?>" class="regular-text" autocomplete="off" />
-                                    <p class="description"><?php esc_html_e( 'Optional. Approved template with one body variable {{1}}, used when the 24h customer-service window is closed.', 'wa-meta-control' ); ?></p>
+                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[template_name]" value="<?php echo esc_attr( wamc_setting( 'template_name') ); ?>" class="regular-text" autocomplete="off" placeholder="order_followup_ar" />
+                                    <p class="description"><?php esc_html_e( 'قالب Utility معتمد يُستخدم تلقائياً لإرسال رسالتك من شات الأوردر عندما تكون نافذة الـ 24 ساعة مغلقة.', 'wa-meta-control' ); ?></p>
                                 </td>
                             </tr>
                             <tr>
                                 <th><?php esc_html_e( 'Fallback Template Language', 'wa-meta-control' ); ?></th>
                                 <td>
-                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[template_lang]" value="<?php echo esc_attr( wamc_setting( 'template_lang', 'ar') ); ?>" class="regular-text" autocomplete="off" />
+                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[template_lang]" value="<?php echo esc_attr( wamc_setting( 'template_lang', 'ar') ); ?>" class="regular-text" style="max-width:120px" autocomplete="off" />
                                     <p class="description"><?php esc_html_e( 'e.g. ar, en_US', 'wa-meta-control' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th><?php esc_html_e( 'Fallback Template Variables (متغيرات قالب الشات)', 'wa-meta-control' ); ?></th>
+                                <td>
+                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[template_vars]" value="<?php echo esc_attr( wamc_setting( 'template_vars', '{customer_name}, {order_id}, {message}' ) ); ?>" class="regular-text" style="direction:ltr;text-align:left" autocomplete="off" placeholder="{customer_name}, {order_id}, {message}" />
+                                    <p class="description">
+                                        <?php esc_html_e( 'المتغيرات بالترتيب مفصولة بفاصلة: {customer_name} اسم العميل | {order_id} رقم الطلب | {message} نص الرسالة التي تكتبها في الشات. (إذا كان القالب يأخذ متغيراً واحداً {{1}} فقط اكتب {message}).', 'wa-meta-control' ); ?>
+                                    </p>
                                 </td>
                             </tr>
                         </table>

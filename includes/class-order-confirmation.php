@@ -125,8 +125,14 @@ class WAMC_Confirm_Control {
                 }
 
                 foreach ( (array) ( $value['statuses'] ?? [] ) as $st ) {
-                    $err = $st['errors'][0]['title'] ?? $st['errors'][0]['message'] ?? '';
-                    WAMC_Message_Log::update_status( (string) ( $st['id'] ?? '' ), sanitize_text_field( $st['status'] ?? '' ), sanitize_text_field( $err ) );
+                    $err_obj = $st['errors'][0] ?? [];
+                    $err_parts = array_filter( [
+                        ! empty( $err_obj['code'] ) ? ( '#' . $err_obj['code'] ) : '',
+                        $err_obj['title'] ?? '',
+                        $err_obj['error_data']['details'] ?? $err_obj['message'] ?? '',
+                    ] );
+                    $err_str = implode( ' — ', array_unique( $err_parts ) );
+                    WAMC_Message_Log::update_status( (string) ( $st['id'] ?? '' ), sanitize_text_field( $st['status'] ?? '' ), sanitize_text_field( $err_str ) );
                 }
 
                 foreach ( (array) ( $value['messages'] ?? [] ) as $msg ) {
@@ -201,7 +207,17 @@ class WAMC_Confirm_Control {
             return;
         }
 
-        WAMC_Message_Log::add( 'received', [ 'id' => $msg['id'] ?? '', 'to' => $from, 'text' => $chat, 'status' => 'received' ] );
+        // Look up latest order for this phone so Received Messages log shows the Order ID
+        $latest_order = WAMC_Order_Lookup::find_latest( $from );
+        $in_order_id  = $latest_order ? $latest_order->get_id() : null;
+
+        WAMC_Message_Log::add( 'received', [
+            'id'       => $msg['id'] ?? '',
+            'to'       => $from,
+            'text'     => $chat,
+            'status'   => 'received',
+            'order_id' => $in_order_id,
+        ] );
 
         // Update 24h messaging window: customer sent us a message, so window opens
         WAMC_Window_Tracker::update( $from );

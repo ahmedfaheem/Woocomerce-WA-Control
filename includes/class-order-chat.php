@@ -295,14 +295,71 @@ class WAMC_CRM {
             wp_send_json_error( [ 'message' => 'الطلب غير موجود' ] );
         }
 
-        $phone  = WAMC_Cache::get_billing_phone( $order_id );
-        $result = wamc_api()->send_message( $phone, $message );
+        $phone        = WAMC_Cache::get_billing_phone( $order_id );
+        $tpl_name     = trim( (string) wamc_setting( 'template_name', '' ) );
+        $tpl_lang     = trim( (string) wamc_setting( 'template_lang', 'ar' ) ) ?: 'ar';
+        $tpl_vars_raw = trim( (string) wamc_setting( 'template_vars', '{customer_name}, {order_id}, {message}' ) ) ?: '{message}';
+
+        $current_user = wp_get_current_user();
+        $sender_name  = ( $current_user && $current_user->exists() )
+            ? ( $current_user->display_name ?: $current_user->user_login )
+            : 'Admin';
+
+        $win_status = WAMC_Window_Tracker::status_label( $phone );
+
+        if ( $win_status === 'open' ) {
+            $result = wamc_api()->send_message( $phone, $message );
+            WAMC_Message_Log::enrich_latest_or_add( 'sent', [
+                'to'                => WAMC_Meta_Client::normalize_number( $phone ),
+                'notification_type' => 'order_chat',
+                'order_id'          => $order_id,
+                'window_status'     => 'open',
+                'msg_type'          => 'text',
+                'sender_user'       => $sender_name,
+                'reason'            => 'Order Chat — 24h window OPEN',
+            ] );
+        } else {
+            if ( $tpl_name === '' ) {
+                wp_send_json_error( [
+                    'message' => '🔒 نافذة الـ 24 ساعة مغلقة مع العميل. لإرسال الرسالة تلقائياً عبر قالب، أضف اسم القالب في (WA Meta → Settings → Fallback Template Name).',
+                ] );
+            }
+
+            $customer_name = trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ) ?: 'عميلنا العزيز';
+            $clean_msg     = trim( preg_replace( '/\s+/', ' ', $message ) );
+            $replacements  = [
+                '{customer_name}' => $customer_name,
+                '{name}'          => $customer_name,
+                '{order_id}'      => (string) $order_id,
+                '{message}'       => $clean_msg,
+                '{total}'         => $order->get_total() . ' ' . $order->get_currency(),
+            ];
+
+            $vars_spec  = array_filter( array_map( 'trim', explode( ',', $tpl_vars_raw ) ) );
+            $tpl_params = [];
+            foreach ( $vars_spec as $token ) {
+                $val = strtr( $token, $replacements );
+                $tpl_params[] = $val !== '' ? $val : '-';
+            }
+            if ( empty( $tpl_params ) ) {
+                $tpl_params = [ $clean_msg ];
+            }
+
+            $result = wamc_api()->send_template( $phone, $tpl_name, $tpl_lang, $tpl_params );
+            WAMC_Message_Log::enrich_latest_or_add( 'sent', [
+                'to'                => WAMC_Meta_Client::normalize_number( $phone ),
+                'notification_type' => 'order_chat',
+                'order_id'          => $order_id,
+                'window_status'     => $win_status,
+                'msg_type'          => 'template',
+                'template_name'     => $tpl_name,
+                'sender_user'       => $sender_name,
+                'reason'            => 'Order Chat — 24h window CLOSED, sent via Fallback Template',
+            ] );
+        }
 
         if ( isset( $result['error'] ) ) {
             $err_str = is_array( $result['error'] ) ? ( $result['error']['message'] ?? wp_json_encode( $result['error'] ) ) : (string) $result['error'];
-            if ( strpos( $err_str, '131047' ) !== false || strpos( $err_str, '24 hours' ) !== false ) {
-                $err_str = 'نافذة الـ 24 ساعة مغلقة مع هذا العميل (لا يمكن إرسال نص حر إلا بعد أن يبدأ العميل بمراسلتك أولاً).';
-            }
             wp_send_json_error( [ 'message' => $err_str ] );
         }
 
@@ -312,9 +369,12 @@ class WAMC_CRM {
             wp_send_json_error( [ 'message' => 'تعذر الإرسال' ] );
         }
 
+        $saved_label = ( $win_status === 'open' ) ? $message : '[قالب ' . $tpl_name . '] ' . $message;
+
         WAMC_Cache::append_order_message( $order_id, [
             'type'      => 'sent',
-            'message'   => $message,
+            'message'   => $saved_label,
+            'user'      => $sender_name,
             'timestamp' => current_time( 'mysql' ),
         ] );
 
@@ -324,7 +384,11 @@ class WAMC_CRM {
 
         self::push_order_update( $order_id, $html );
 
-        wp_send_json_success( [ 'message' => 'تم الإرسال بنجاح', 'html' => $html ] );
+        $success_msg = ( $win_status === 'open' )
+            ? 'تم الإرسال بنجاح (رسالة نصية مباشرة)'
+            : 'تم الإرسال بنجاح عبر القالب (' . $tpl_name . ') لفتح المحادثة مع العميل';
+
+        wp_send_json_success( [ 'message' => $success_msg, 'html' => $html ] );
     }
 
     // ── Mark Read on Order Edit ────────────────────────────────────────────────
@@ -356,17 +420,32 @@ class WAMC_CRM {
         $pusher_key     = trim( (string) wamc_setting( 'pusher_key', '' ) );
         $pusher_cluster = trim( (string) wamc_setting( 'pusher_cluster', 'eu' ) ) ?: 'eu';
         $settings_url   = admin_url( 'admin.php?page=wa-meta-settings' );
+        $phone          = WAMC_Cache::get_billing_phone( $order_id );
+        $win_status     = $phone ? WAMC_Window_Tracker::status_label( $phone ) : 'unknown';
+        $fallback_tpl   = trim( (string) wamc_setting( 'template_name', '' ) );
         ?>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px">
-            <?php if ( $pusher_key !== '' ) : ?>
-                <span id="wamc-ws-badge" style="color:#15803d;background:#dcfce7;padding:3px 8px;border-radius:12px;font-weight:600">
-                    ⚡ جاري الاتصال بالبث اللحظي (WebSocket)...
-                </span>
-            <?php else : ?>
-                <span style="color:#9a3412;background:#ffedd5;padding:3px 8px;border-radius:12px">
-                    ℹ️ لتفعيل التحديث اللحظي التلقائي (بدون Polling)، أضف مفاتيح Pusher المجانية في <a href="<?php echo esc_url( $settings_url ); ?>">إعدادات الإضافة</a>
-                </span>
-            <?php endif; ?>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:12px">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <?php if ( $win_status === 'open' ) : ?>
+                    <span id="wamc-win-badge" style="color:#15803d;background:#dcfce7;padding:3px 8px;border-radius:12px;font-weight:600">
+                        🟢 نافذة 24 ساعة مفتوحة (إرسال نص حر مجاني)
+                    </span>
+                <?php elseif ( $fallback_tpl !== '' ) : ?>
+                    <span id="wamc-win-badge" style="color:#1d4ed8;background:#dbeafe;padding:3px 8px;border-radius:12px;font-weight:600">
+                        🔒 النافذة مغلقة — سيُرسل نصك تلقائياً داخل قالب (<?php echo esc_html( $fallback_tpl ); ?>)
+                    </span>
+                <?php else : ?>
+                    <span id="wamc-win-badge" style="color:#b91c1c;background:#fee2e2;padding:3px 8px;border-radius:12px;font-weight:600">
+                        🔒 النافذة مغلقة — <a href="<?php echo esc_url( $settings_url ); ?>">حدد Fallback Template في الإعدادات</a> للإرسال
+                    </span>
+                <?php endif; ?>
+
+                <?php if ( $pusher_key !== '' ) : ?>
+                    <span id="wamc-ws-badge" style="color:#15803d;background:#f0fdf4;padding:3px 8px;border-radius:12px;font-size:11px">
+                        ⚡ WebSocket متصل
+                    </span>
+                <?php endif; ?>
+            </div>
             <button type="button" id="wamc-crm-manual-refresh" class="button button-small" style="font-size:11px">↻ تحديث الشات</button>
         </div>
 
@@ -516,10 +595,16 @@ class WAMC_CRM {
             $text = $m['message'] ?? '';
             $file = $m['file'] ?? '';
             $ts   = $m['timestamp'] ?? '';
+            $user = $m['user'] ?? '';
             $cls  = $type === 'sent' ? 'wamc-sent' : 'wamc-received';
             ?>
             <div class="wamc-bubble-row">
                 <div class="wamc-bubble <?php echo $cls; ?>">
+                    <?php if ( $type === 'sent' && $user !== '' ) : ?>
+                        <div style="font-size:11px;font-weight:700;color:#0f766e;margin-bottom:3px;border-bottom:1px dashed rgba(0,0,0,.08);padding-bottom:2px">
+                            👤 <?php echo esc_html( $user ); ?>
+                        </div>
+                    <?php endif; ?>
                     <?php if ( $text ) : echo esc_html( $text ); endif; ?>
                     <?php if ( $file ) : ?>
                         <a href="<?php echo esc_url( $file ); ?>" target="_blank">
