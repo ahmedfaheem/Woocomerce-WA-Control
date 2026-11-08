@@ -136,7 +136,14 @@ class WAMC_Meta_Client {
 
         $rows = [];
         foreach ( array_slice( $buttons, 0, 3, true ) as $id => $title ) {
-            $rows[] = [ 'type' => 'reply', 'reply' => [ 'id' => (string) $id, 'title' => mb_substr( (string) $title, 0, 20 ) ] ];
+            if ( is_array( $title ) ) {
+                $btn_id    = (string) ( $title['id'] ?? $id );
+                $btn_title = (string) ( $title['title'] ?? '' );
+            } else {
+                $btn_id    = (string) $id;
+                $btn_title = (string) $title;
+            }
+            $rows[] = [ 'type' => 'reply', 'reply' => [ 'id' => $btn_id, 'title' => mb_substr( $btn_title, 0, 20 ) ] ];
         }
 
         $payload                = $this->base_payload( $to, 'individual' );
@@ -174,6 +181,33 @@ class WAMC_Meta_Client {
 
     // ── Groups ────────────────────────────────────────────────────────────────
 
+    /**
+     * Create a new WhatsApp group via Meta Cloud Groups API.
+     * Requires Official Business Account (OBA) or eligible tier.
+     *
+     * @param string $subject     Group name (max 100 chars).
+     * @param string $description Optional description.
+     */
+    public function create_group( string $subject, string $description = '' ): array {
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'subject'           => $subject,
+        ];
+        if ( $description !== '' ) {
+            $payload['description'] = $description;
+        }
+        return $this->request( 'POST', "/{$this->phone_number_id}/groups", $payload, null, true );
+    }
+
+    /**
+     * Get or regenerate invite link for a group via Meta Cloud API.
+     *
+     * @param string $group_id Full Group JID or ID.
+     */
+    public function get_group_invite_link( string $group_id ): array {
+        return $this->request( 'POST', "/{$group_id}/invite_link", [], null, true );
+    }
+
     public function get_group_list(): array {
         $res = $this->request( 'GET', "/{$this->phone_number_id}/groups", [ 'limit' => 100 ] );
         if ( ! $res['success'] ) {
@@ -182,8 +216,9 @@ class WAMC_Meta_Client {
         $groups = [];
         foreach ( $res['data']['data'] ?? [] as $g ) {
             $groups[] = [
-                'id'   => $g['id'] ?? '',
-                'name' => $g['subject'] ?? $g['name'] ?? '',
+                'id'          => $g['id'] ?? '',
+                'name'        => $g['subject'] ?? $g['name'] ?? '',
+                'invite_link' => $g['invite_link'] ?? '',
             ];
         }
         return [ 'success' => true, 'data' => [ 'groups' => $groups ] ];

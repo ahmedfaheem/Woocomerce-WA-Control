@@ -16,6 +16,7 @@ class WAMC_Admin_Page {
         add_action( 'wp_ajax_wamc_fetch_log',    [ __CLASS__, 'ajax_fetch_log' ] );
         add_action( 'wp_ajax_wamc_fetch_service',[ __CLASS__, 'ajax_fetch_service' ] );
         add_action( 'wp_ajax_wamc_get_groups',   [ __CLASS__, 'ajax_get_groups' ] );
+        add_action( 'wp_ajax_wamc_create_group', [ __CLASS__, 'ajax_create_group' ] );
         add_action( 'wp_ajax_wamc_check_window', [ __CLASS__, 'ajax_check_window' ] );
         add_action( 'wp_ajax_wamc_open_window',  [ __CLASS__, 'ajax_open_window' ] );
     }
@@ -112,7 +113,7 @@ class WAMC_Admin_Page {
             $result = wamc_api()->get_sent_messages( $page );
         }
 
-        wp_send_json_success( $result );
+        wp_send_json_success( $result['data'] ?? $result );
     }
 
     public static function ajax_fetch_service(): void {
@@ -132,7 +133,120 @@ class WAMC_Admin_Page {
         if ( ! current_user_can( 'manage_woocommerce' ) ) {
             wp_send_json_error();
         }
-        wp_send_json_success( wamc_api()->get_group_list() );
+
+        $api_res = wamc_api()->get_group_list();
+        $groups  = [];
+        if ( ! empty( $api_res['data']['groups'] ) && is_array( $api_res['data']['groups'] ) ) {
+            $groups = $api_res['data']['groups'];
+        }
+
+        // Merge locally saved groups
+        $saved = get_option( 'wamc_saved_groups', [] );
+        if ( is_array( $saved ) && ! empty( $saved ) ) {
+            $existing_ids = wp_list_pluck( $groups, 'id' );
+            foreach ( $saved as $gid => $ginfo ) {
+                if ( ! in_array( $gid, $existing_ids, true ) ) {
+                    $groups[] = [
+                        'id'          => $gid,
+                        'name'        => $ginfo['name'] ?? 'WhatsApp Group',
+                        'invite_link' => $ginfo['invite_link'] ?? '',
+                    ];
+                }
+            }
+        }
+
+        wp_send_json_success( [ 'data' => [ 'groups' => $groups ] ] );
+    }
+
+    public static function ajax_create_group(): void {
+        check_ajax_referer( 'wamc_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => 'Unauthorized' ] );
+        }
+
+        $subject     = sanitize_text_field( $_POST['subject'] ?? '' );
+        $description = sanitize_textarea_field( $_POST['description'] ?? '' );
+        $invite_raw  = sanitize_textarea_field( $_POST['invite_phones'] ?? '' );
+
+        if ( empty( $subject ) ) {
+            wp_send_json_error( [ 'message' => 'اسم المجموعة مطلوب.' ] );
+        }
+
+        $api = wamc_api();
+        $res = $api->create_group( $subject, $description );
+
+        if ( ! empty( $res['error'] ) ) {
+            $err_msg = is_array( $res['error'] ) ? ( $res['error']['message'] ?? wp_json_encode( $res['error'] ) ) : (string) $res['error'];
+            wp_send_json_error( [
+                'message' => 'خطأ من Meta عند إنشاء المجموعة: ' . $err_msg,
+                'raw'     => $res,
+            ] );
+        }
+
+        $group_id    = sanitize_text_field( $res['data']['id'] ?? $res['data']['group_id'] ?? '' );
+        $invite_link = '';
+
+        if ( ! empty( $group_id ) ) {
+            $link_res = $api->get_group_invite_link( $group_id );
+            if ( ! empty( $link_res['data']['invite_link'] ) ) {
+                $invite_link = esc_url_raw( $link_res['data']['invite_link'] );
+            } elseif ( ! empty( $link_res['data']['link'] ) ) {
+                $invite_link = esc_url_raw( $link_res['data']['link'] );
+            }
+
+            $saved = get_option( 'wamc_saved_groups', [] );
+            if ( ! is_array( $saved ) ) {
+                $saved = [];
+            }
+            $saved[ $group_id ] = [
+                'id'          => $group_id,
+                'name'        => $subject,
+                'invite_link' => $invite_link,
+                'created_at'  => current_time( 'mysql' ),
+            ];
+            update_option( 'wamc_saved_groups', $saved, false );
+
+            $invited_count = 0;
+            if ( ! empty( $invite_raw ) ) {
+                $lines = explode( "\n", $invite_raw );
+                foreach ( $lines as $line ) {
+                    $digits = preg_replace( '/\D+/', '', trim( $line ) );
+                    if ( strlen( $digits ) >= 8 ) {
+                        $invite_msg = sprintf(
+                            "دعوة للانضمام إلى مجموعة: %s\n%sرابط الانضمام:\n%s",
+                            $subject,
+                            $description ? ( $description . "\n" ) : '',
+                            $invite_link ?: '(الرابط قيد التجهيز)'
+                        );
+                        $api->send_message( $digits, $invite_msg );
+                        $invited_count++;
+                    }
+                }
+            }
+
+            wp_send_json_success( [
+                'group_id'      => $group_id,
+                'invite_link'   => $invite_link,
+                'invited_count' => $invited_count,
+                'message'       => 'تم إنشاء المجموعة بنجاح!',
+                'raw'           => $res,
+            ] );
+        }
+
+        $req_id = sanitize_text_field( $res['data']['request_id'] ?? '' );
+        if ( ! empty( $req_id ) ) {
+            wp_send_json_success( [
+                'request_id' => $req_id,
+                'group_id'   => '',
+                'message'    => 'تم استلام طلب إنشاء المجموعة من Meta (معرف الطلب: ' . $req_id . '). سيتم تحديث الـ ID والرابط تلقائياً عبر الـ Webhook بمجرد المعالجة.',
+                'raw'        => $res,
+            ] );
+        }
+
+        wp_send_json_error( [
+            'message' => 'لم تقم Meta بإرجاع معرف المجموعة.',
+            'raw'     => $res,
+        ] );
     }
 
     public static function ajax_check_window(): void {
@@ -184,7 +298,7 @@ class WAMC_Admin_Page {
                 <button class="wamc-tab-btn active" data-tab="test">📤 <?php esc_html_e( 'Test Message', 'wa-meta-control' ); ?></button>
                 <button class="wamc-tab-btn" data-tab="log">📋 <?php esc_html_e( 'Message Log', 'wa-meta-control' ); ?></button>
                 <button class="wamc-tab-btn" data-tab="service">🔌 <?php esc_html_e( 'Service Info', 'wa-meta-control' ); ?></button>
-                <button class="wamc-tab-btn" data-tab="groups">👥 <?php esc_html_e( 'Group List', 'wa-meta-control' ); ?></button>
+                <button class="wamc-tab-btn" data-tab="groups">👥 <?php esc_html_e( 'المجموعات وإنشاؤها', 'wa-meta-control' ); ?></button>
             </nav>
 
             <!-- Tab: Test Message -->
@@ -285,15 +399,73 @@ class WAMC_Admin_Page {
                 </div>
             </div>
 
-            <!-- Tab: Group List -->
+            <!-- Tab: Group List & Creation -->
             <div class="wamc-tab-panel" id="wamc-tab-groups" style="display:none">
-                <div class="wamc-card">
-                    <h2 class="wamc-card-title">👥 <?php esc_html_e( 'WhatsApp Groups', 'wa-meta-control' ); ?></h2>
-                    <p class="description" style="margin-bottom:12px">
-                        <?php esc_html_e( 'Fetch your groups to find the Group IDs to use in settings.', 'wa-meta-control' ); ?>
+                <!-- Card: Create Group -->
+                <div class="wamc-card" style="margin-bottom:20px;border-top:3px solid #25D366">
+                    <h2 class="wamc-card-title">➕ <?php esc_html_e( 'إنشاء مجموعة جديدة واستخراج الـ ID ورابط الدعوة', 'wa-meta-control' ); ?></h2>
+                    <p class="description" style="margin:0 20px 16px;padding:8px 12px;background:#f0f8ff;border-right:4px solid #25D366;border-radius:4px">
+                        💡 <strong><?php esc_html_e( 'ملاحظة هامة:', 'wa-meta-control' ); ?></strong>
+                        <?php esc_html_e( 'يتم إنشاء المجموعة عبر Meta Cloud API. بعد الإنشاء ستحصل على Group ID ورابط الدعوة (Invite Link) فوراً، ويمكنك إرسال الدعوة تلقائياً لأرقام الهواتف المدخلة واستخدام الـ Group ID في إعدادات الشحن والطلبات.', 'wa-meta-control' ); ?>
                     </p>
-                    <button type="button" id="wamc-btn-load-groups" class="button button-primary">
-                        🔄 <?php esc_html_e( 'Load Groups', 'wa-meta-control' ); ?>
+                    <table class="form-table wamc-table">
+                        <tr>
+                            <th><?php esc_html_e( 'اسم المجموعة (Subject) *', 'wa-meta-control' ); ?></th>
+                            <td>
+                                <input type="text" id="wamc-new-group-subject" class="regular-text" placeholder="مثال: إشعارات فريق الشحن والإدارة" maxlength="100" />
+                                <p class="description"><?php esc_html_e( 'اسم المجموعة كما سيظهر في واتساب (بحد أقصى 100 حرف).', 'wa-meta-control' ); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><?php esc_html_e( 'وصف المجموعة (اختياري)', 'wa-meta-control' ); ?></th>
+                            <td>
+                                <textarea id="wamc-new-group-desc" class="large-text" rows="2" placeholder="وصف موجز للمجموعة..."></textarea>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><?php esc_html_e( 'أرقام هواتف لدعوتها (اختياري)', 'wa-meta-control' ); ?></th>
+                            <td>
+                                <textarea id="wamc-new-group-phones" class="large-text" rows="3" placeholder="201009300080&#10;201123456789"></textarea>
+                                <p class="description"><?php esc_html_e( 'أدخل رقماً في كل سطر مع كود الدولة. سيقوم النظام بإرسال رسالة برابط الدعوة فور إنشاء الجروب.', 'wa-meta-control' ); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th></th>
+                            <td>
+                                <button type="button" id="wamc-btn-create-group" class="button button-primary button-large">
+                                    ⚡ <?php esc_html_e( 'إنشاء المجموعة واستخراج الرابط والـ ID', 'wa-meta-control' ); ?>
+                                </button>
+                                <span id="wamc-create-group-spinner" class="spinner" style="float:none;margin:0 10px"></span>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div id="wamc-create-group-result" style="display:none;margin:16px 20px 20px;padding:14px;background:#f8fff9;border:1px solid #c3e6cb;border-radius:6px">
+                        <div id="wamc-create-group-msg" style="font-size:14px;font-weight:bold;color:#155724;margin-bottom:12px"></div>
+                        <div style="display:flex;flex-direction:column;gap:10px">
+                            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                                <strong>Group ID:</strong>
+                                <code id="wamc-result-gid" style="font-size:14px;background:#fff;padding:4px 8px;border:1px solid #ccc;border-radius:4px;user-select:all"></code>
+                                <button type="button" class="button button-small" id="wamc-copy-new-gid">📋 <?php esc_html_e( 'نسخ Group ID', 'wa-meta-control' ); ?></button>
+                            </div>
+                            <div id="wamc-result-link-wrap" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                                <strong><?php esc_html_e( 'رابط الدعوة (Invite Link):', 'wa-meta-control' ); ?></strong>
+                                <code id="wamc-result-link" style="font-size:13px;background:#fff;padding:4px 8px;border:1px solid #ccc;border-radius:4px;user-select:all"></code>
+                                <a id="wamc-open-new-link" href="#" target="_blank" class="button button-small">🔗 <?php esc_html_e( 'فتح الرابط', 'wa-meta-control' ); ?></a>
+                                <button type="button" class="button button-small" id="wamc-copy-new-link">📋 <?php esc_html_e( 'نسخ الرابط', 'wa-meta-control' ); ?></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card: Existing Groups List -->
+                <div class="wamc-card">
+                    <h2 class="wamc-card-title">👥 <?php esc_html_e( 'قائمة المجموعات الحالية', 'wa-meta-control' ); ?></h2>
+                    <p class="description" style="margin-bottom:12px">
+                        <?php esc_html_e( 'جلب المجموعات المسجلة لاستخراج معرفاتها وروابط الدعوة لاستخدامها في إعدادات الإشعارات.', 'wa-meta-control' ); ?>
+                    </p>
+                    <button type="button" id="wamc-btn-load-groups" class="button button-secondary">
+                        🔄 <?php esc_html_e( 'تحديث المجموعات', 'wa-meta-control' ); ?>
                     </button>
                     <div id="wamc-groups-output" style="margin-top:16px"></div>
                 </div>
@@ -347,35 +519,86 @@ class WAMC_Admin_Page {
             function loadLog(page){
                 logPage = page;
                 var type = $('input[name="log_type"]:checked').val();
-                $('#wamc-log-table-wrap').html('<p>جاري التحميل...</p>');
+                $('#wamc-log-table-wrap').html('<p style="padding:15px;color:#666">جاري التحميل...</p>');
                 $.post(ajaxurl, {action:'wamc_fetch_log', nonce:nonce, log_type:type, page:logPage}, function(r){
-                    if(!r.success){ $('#wamc-log-table-wrap').html('<p style="color:red">فشل التحميل</p>'); return; }
+                    if(!r.success){ $('#wamc-log-table-wrap').html('<p style="color:red;padding:15px">فشل التحميل</p>'); return; }
 
-                    // Actual shape: { success, data: { count, pageCount, page, data: [...] } }
-                    var payload    = r.data.data || {};          // the inner 'data' object from API
-                    var rows       = payload.data || [];          // the messages array
-                    logPageCount   = payload.pageCount || 1;
-                    var pageStr    = payload.page || ('صفحة ' + logPage);
+                    // Unpack data flexibly (supports direct or nested shapes)
+                    var payload = (r.data && r.data.data && !Array.isArray(r.data.data)) ? r.data.data : (r.data || {});
+                    var rows    = Array.isArray(payload) ? payload : (payload.data || payload.rows || payload.items || []);
+                    logPageCount = payload.pageCount || 1;
+                    var pageStr  = payload.page || ('صفحة ' + logPage + ' / ' + logPageCount);
 
                     if(!rows.length){
-                        $('#wamc-log-table-wrap').html('<p>لا توجد رسائل</p>');
+                        $('#wamc-log-table-wrap').html(
+                            '<div style="padding:35px 20px;text-align:center;color:#888">'
+                            + '<p style="font-size:16px;margin:0 0 6px">لا توجد رسائل ' + (type === 'received' ? 'مستقبلة' : 'مرسلة') + ' حتى الآن</p>'
+                            + '<p style="font-size:12px;color:#aaa">' + (type === 'received' ? 'عندما يرسل العميل رسالة على واتساب ستظهر هنا فوراً' : 'جميع الإشعارات الصادرة يتم تسجيلها هنا تلقائياً') + '</p>'
+                            + '</div>'
+                        );
                         $('#wamc-log-pager').text('');
                         $('#wamc-log-prev, #wamc-log-next').prop('disabled', true);
                         return;
                     }
 
-                    var html = '<table class="widefat fixed wamc-log-table"><thead><tr>'
-                        +'<th>Phone</th><th>Message</th><th>Status</th><th>Delivery</th><th>Created</th></tr></thead><tbody>';
+                    var html = '<table class="widefat fixed striped wamc-log-table"><thead><tr>';
+                    if(type === 'received'){
+                        html += '<th style="width:160px">المرسل (الهاتف)</th>'
+                             + '<th style="width:100px">الطلب</th>'
+                             + '<th>نص الرسالة المستقبلة</th>'
+                             + '<th style="width:160px">وقت الاستقبال</th>';
+                    } else {
+                        html += '<th style="width:160px">الوجهة (الهاتف/المجموعة)</th>'
+                             + '<th style="width:90px">الطلب</th>'
+                             + '<th style="width:130px">نافذة 24h</th>'
+                             + '<th style="width:140px">نوع التوجيه</th>'
+                             + '<th>نص / تفاصيل الرسالة</th>'
+                             + '<th style="width:110px">حالة التسليم</th>'
+                             + '<th style="width:150px">الوقت</th>';
+                    }
+                    html += '</tr></thead><tbody>';
+
                     $.each(rows, function(i, row){
-                        var statusClass = 'wamc-status-' + (row.status||'').toLowerCase().replace(/\s+/g,'-');
-                        html += '<tr>'
-                            +'<td>'+esc(row.phonenumber||row.groupId||'')+'</td>'
-                            +'<td style="max-width:300px;word-break:break-word">'+esc((row.text||'').substring(0,120))+'</td>'
-                            +'<td><span class="wamc-status '+statusClass+'">'+esc(row.status||'')+'</span></td>'
-                            +'<td>'+esc(row.delivery||'')+'</td>'
-                            +'<td>'+esc(row.createdAt||row.executedAt||'')+'</td>'
-                            +'</tr>';
+                        var phone = esc(row.phonenumber || row.to || row.groupId || '');
+                        var text  = esc(row.text || '');
+                        var time  = esc(row.createdAt || row.time || '');
+                        var order = row.order_id ? ('<a href="post.php?post='+row.order_id+'&action=edit" target="_blank" style="font-weight:bold">#'+row.order_id+'</a>') : '<span style="color:#aaa">—</span>';
+
+                        if(type === 'received'){
+                            html += '<tr>'
+                                 + '<td><strong><code>+' + phone + '</code></strong></td>'
+                                 + '<td>' + order + '</td>'
+                                 + '<td style="word-break:break-word;font-size:13px;line-height:1.5">' + text + '</td>'
+                                 + '<td><span style="color:#666;font-size:12px">' + time + '</span></td>'
+                                 + '</tr>';
+                        } else {
+                            var wStatus = row.window_status || '';
+                            var wBadge  = wStatus === 'open'
+                                ? '<span class="wamc-status" style="background:#d4edda;color:#155724">🟢 مفتوحة</span>'
+                                : (wStatus === 'closed' ? '<span class="wamc-status" style="background:#f8d7da;color:#721c24">🔴 مغلقة</span>' : '<span style="color:#888">—</span>');
+
+                            var msgType = row.msg_type || '';
+                            var rBadge  = msgType === 'text'
+                                ? '<span class="wamc-status" style="background:#e8f4fd;color:#0c5460">📱 نص حر</span>'
+                                : (msgType === 'template' ? '<span class="wamc-status" style="background:#fff3cd;color:#856404">🔒 قالب' + (row.template_name ? (': <small>'+esc(row.template_name)+'</small>') : '') + '</span>' : '<span style="color:#888">—</span>');
+
+                            var st = (row.status || '').toLowerCase();
+                            var stColor = (st === 'delivered' || st === 'read' || st === 'sent') ? '#155724' : (st === 'failed' ? '#721c24' : '#555');
+                            var stBg    = (st === 'delivered' || st === 'read' || st === 'sent') ? '#d4edda' : (st === 'failed' ? '#f8d7da' : '#eee');
+                            var stBadge = '<span class="wamc-status" style="background:'+stBg+';color:'+stColor+'">' + esc(row.status || 'sent') + '</span>';
+
+                            html += '<tr>'
+                                 + '<td><strong><code>+' + phone + '</code></strong></td>'
+                                 + '<td>' + order + '</td>'
+                                 + '<td>' + wBadge + '</td>'
+                                 + '<td>' + rBadge + '</td>'
+                                 + '<td style="word-break:break-word;font-size:12px;line-height:1.4">' + text + '</td>'
+                                 + '<td>' + stBadge + '</td>'
+                                 + '<td><span style="color:#666;font-size:12px">' + time + '</span></td>'
+                                 + '</tr>';
+                        }
                     });
+
                     html += '</tbody></table>';
                     $('#wamc-log-table-wrap').html(html);
                     $('#wamc-log-pager').text(pageStr);
@@ -435,44 +658,151 @@ class WAMC_Admin_Page {
                 });
             });
 
+            // ── Group Creation & Management
+            $('#wamc-btn-create-group').on('click', function(){
+                var $btn = $(this);
+                var subject = $('#wamc-new-group-subject').val().trim();
+                var desc    = $('#wamc-new-group-desc').val().trim();
+                var phones  = $('#wamc-new-group-phones').val().trim();
+                var $resWrap = $('#wamc-create-group-result');
+                var $spinner = $('#wamc-create-group-spinner');
+
+                if(!subject){
+                    alert('يرجى إدخال اسم المجموعة.');
+                    $('#wamc-new-group-subject').focus();
+                    return;
+                }
+
+                $btn.prop('disabled', true);
+                $spinner.addClass('is-active');
+                $resWrap.hide();
+
+                $.post(ajaxurl, {
+                    action: 'wamc_create_group',
+                    nonce: nonce,
+                    subject: subject,
+                    description: desc,
+                    invite_phones: phones
+                }, function(r){
+                    $btn.prop('disabled', false);
+                    $spinner.removeClass('is-active');
+
+                    if(!r.success){
+                        var errMsg = (r.data && r.data.message) ? r.data.message : 'فشل إنشاء المجموعة.';
+                        $resWrap.show().css({background:'#fdf2f2', borderColor:'#f5c6cb'});
+                        $('#wamc-create-group-msg').css('color','#721c24').html('❌ ' + esc(errMsg));
+                        $('#wamc-result-gid').text('—');
+                        $('#wamc-result-link-wrap').hide();
+                        return;
+                    }
+
+                    var d = r.data || {};
+                    $resWrap.show().css({background:'#f8fff9', borderColor:'#c3e6cb'});
+                    var successTxt = '✓ ' + esc(d.message || 'تم إنشاء المجموعة بنجاح!');
+                    if(d.invited_count > 0){
+                        successTxt += ' (تم إرسال رابط الدعوة إلى ' + d.invited_count + ' رقم)';
+                    }
+                    $('#wamc-create-group-msg').css('color','#155724').html(successTxt);
+
+                    var gid = d.group_id || 'قيد المعالجة من Meta';
+                    $('#wamc-result-gid').text(gid);
+                    $('#wamc-copy-new-gid').data('id', gid);
+
+                    if(d.invite_link){
+                        $('#wamc-result-link').text(d.invite_link);
+                        $('#wamc-open-new-link').attr('href', d.invite_link);
+                        $('#wamc-copy-new-link').data('link', d.invite_link);
+                        $('#wamc-result-link-wrap').show();
+                    } else {
+                        $('#wamc-result-link-wrap').hide();
+                    }
+
+                    // Refresh group list
+                    $('#wamc-btn-load-groups').trigger('click');
+                }).fail(function(){
+                    $btn.prop('disabled', false);
+                    $spinner.removeClass('is-active');
+                    alert('حدث خطأ في الاتصال بالخادم.');
+                });
+            });
+
+            $('#wamc-copy-new-gid').on('click', function(){
+                var id = $(this).data('id') || $('#wamc-result-gid').text();
+                if(navigator.clipboard && id && id !== '—') {
+                    navigator.clipboard.writeText(id);
+                    $(this).text('✓ تم النسخ');
+                    var $t = $(this);
+                    setTimeout(function(){ $t.text('📋 ' + '<?php esc_html_e( 'نسخ Group ID', 'wa-meta-control' ); ?>'); }, 2000);
+                }
+            });
+
+            $('#wamc-copy-new-link').on('click', function(){
+                var link = $(this).data('link') || $('#wamc-result-link').text();
+                if(navigator.clipboard && link) {
+                    navigator.clipboard.writeText(link);
+                    $(this).text('✓ تم النسخ');
+                    var $t = $(this);
+                    setTimeout(function(){ $t.text('📋 ' + '<?php esc_html_e( 'نسخ الرابط', 'wa-meta-control' ); ?>'); }, 2000);
+                }
+            });
+
             // ── Group List
             $('#wamc-btn-load-groups').on('click', function(){
                 $('#wamc-groups-output').html('<p>جاري التحميل...</p>');
                 $.post(ajaxurl, {action:'wamc_get_groups', nonce:nonce}, function(r){
-                    if(!r.success){ $('#wamc-groups-output').html('<p style="color:red">فشل</p>'); return; }
+                    if(!r.success){ $('#wamc-groups-output').html('<p style="color:red">فشل جلب المجموعات</p>'); return; }
 
-                    // Actual shape: { success, data: { groups: [...] } }
-                    var payload = r.data.data || {};
+                    var payload = r.data.data || r.data || {};
                     var groups  = payload.groups || payload.data || payload.result || [];
 
                     if(!groups.length){
                         $('#wamc-groups-output').html(
                             '<div style="padding:20px;text-align:center;color:#888">'
-                            +'<p style="font-size:16px">لا توجد مجموعات في هذا الحساب</p>'
-                            +'<p style="font-size:13px">أنشئ مجموعة واتساب أولاً، ثم أعد التحميل</p>'
+                            +'<p style="font-size:16px">لا توجد مجموعات محفوظة أو مسترجعة</p>'
+                            +'<p style="font-size:13px">أنشئ مجموعة جديدة من النموذج أعلاه أو انضم لمجموعة عبر واتساب</p>'
                             +'</div>'
                         );
                         return;
                     }
 
                     var html = '<table class="widefat fixed wamc-log-table"><thead><tr>'
-                               +'<th>اسم المجموعة</th><th>Group ID</th><th></th>'
+                               +'<th style="width:25%">اسم المجموعة</th><th style="width:30%">Group ID</th><th style="width:25%">رابط الدعوة</th><th style="width:20%">إجراءات</th>'
                                +'</tr></thead><tbody>';
                     $.each(groups, function(i, g){
                         var gid   = esc(g.id||g.groupId||g._serialized||'');
                         var gname = esc(g.name||g.subject||'Group '+(i+1));
+                        var glink = g.invite_link ? esc(g.invite_link) : '';
                         html += '<tr>'
-                            + '<td>'+gname+'</td>'
+                            + '<td><strong>'+gname+'</strong></td>'
                             + '<td><code>'+gid+'</code></td>'
-                            + '<td><button type="button" class="button wamc-copy-gid" data-id="'+gid+'">📋 نسخ ID</button></td>'
+                            + '<td>'+(glink ? '<a href="'+glink+'" target="_blank" style="font-size:11px;word-break:break-all">'+glink+'</a>' : '<span style="color:#888">—</span>')+'</td>'
+                            + '<td>'
+                            + '<button type="button" class="button button-small wamc-copy-gid" data-id="'+gid+'">📋 نسخ ID</button> '
+                            + (glink ? '<button type="button" class="button button-small wamc-copy-link" data-link="'+glink+'">🔗 نسخ الرابط</button>' : '')
+                            + '</td>'
                             + '</tr>';
                     });
                     html += '</tbody></table>';
                     $('#wamc-groups-output').html(html);
-                    $('#wamc-groups-output').on('click', '.wamc-copy-gid', function(){
+
+                    $('#wamc-groups-output').off('click', '.wamc-copy-gid').on('click', '.wamc-copy-gid', function(){
                         var id = $(this).data('id');
-                        if(navigator.clipboard) navigator.clipboard.writeText(id);
-                        $(this).text('✓ تم النسخ').prop('disabled', true);
+                        if(navigator.clipboard && id) {
+                            navigator.clipboard.writeText(id);
+                            $(this).text('✓ تم النسخ');
+                            var $t = $(this);
+                            setTimeout(function(){ $t.text('📋 نسخ ID'); }, 2000);
+                        }
+                    });
+
+                    $('#wamc-groups-output').off('click', '.wamc-copy-link').on('click', '.wamc-copy-link', function(){
+                        var link = $(this).data('link');
+                        if(navigator.clipboard && link) {
+                            navigator.clipboard.writeText(link);
+                            $(this).text('✓ تم النسخ');
+                            var $t = $(this);
+                            setTimeout(function(){ $t.text('🔗 نسخ الرابط'); }, 2000);
+                        }
                     });
                 });
             });

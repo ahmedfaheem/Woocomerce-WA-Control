@@ -108,7 +108,7 @@ class WAMC_Rate_Limiter {
     // ── Rule: Daily Limit ─────────────────────────────────────────────────────
 
     private static function check_daily_limit(): bool|WP_Error {
-        if ( ! wamc_setting( 'enable_daily_limit', '1' ) ) {
+        if ( wamc_setting( 'enable_daily_limit', '1' ) !== '1' ) {
             return true;
         }
 
@@ -150,7 +150,7 @@ class WAMC_Rate_Limiter {
     // ── Rule: Per-Recipient Cooldown ──────────────────────────────────────────
 
     private static function check_recipient_cooldown( string $phone ): bool|WP_Error {
-        if ( ! wamc_setting( 'enable_cooldown', '1' ) ) {
+        if ( wamc_setting( 'enable_cooldown', '1' ) !== '1' ) {
             return true;
         }
 
@@ -192,7 +192,7 @@ class WAMC_Rate_Limiter {
     // ── Rule: Blacklist ────────────────────────────────────────────────────────
 
     private static function check_blacklist( string $phone ): bool|WP_Error {
-        if ( ! wamc_setting( 'enable_blacklist', '1' ) ) {
+        if ( wamc_setting( 'enable_blacklist', '1' ) !== '1' ) {
             return true;
         }
 

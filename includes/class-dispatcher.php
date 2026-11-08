@@ -117,12 +117,14 @@ class WAMC_Dispatcher {
             );
         }
 
-        // ── 4. Log the result ─────────────────────────────────────────────────
+        // ── 4. Log the result (update the entry created by WAMC_Meta_Client with routing metadata) ──
+        $msg_id    = $result['data']['id'] ?? $result['id'] ?? '';
+        $norm_to   = WAMC_Meta_Client::normalize_number( $phone );
         $log_entry = [
             'dir'               => 'sent',
-            'id'                => $result['id'] ?? '',
-            'to'                => $phone,
-            'text'              => $is_open ? $plain_text : '[template: ' . $template_name . ']',
+            'id'                => $msg_id,
+            'to'                => $norm_to ?: $phone,
+            'text'              => $is_open ? $plain_text : '[template:' . $template_name . ']',
             'status'            => $result['success'] ? 'sent' : 'failed',
             'notification_type' => $notification_type,
             'order_id'          => $order_id,
@@ -133,7 +135,7 @@ class WAMC_Dispatcher {
             'reason'            => $reason,
             'error'             => $result['error'] ?? null,
         ];
-        WAMC_Message_Log::add( 'sent', $log_entry );
+        WAMC_Message_Log::enrich_latest_or_add( 'sent', $log_entry );
 
         // ── 5. Return enriched result ─────────────────────────────────────────
         return array_merge( $result, [

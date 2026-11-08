@@ -54,7 +54,7 @@ class WAMC_Order_Notify {
 
     /** True when confirmation is enabled (so confirmation message serves as the single new order message). */
     public static function should_combine(): bool {
-        return (bool) wamc_setting( 'enable_confirm', '1' );
+        return wamc_setting( 'enable_confirm', '1' ) === '1';
     }
 
     public static function on_created_id( $order_id ): void {

@@ -75,10 +75,16 @@ class WAMC_Cache {
         $old      = [];
         if ( $order ) {
             foreach ( $order->get_meta( '_wamc_messages', false ) as $m ) {
-                $messages[] = $m->value;
+                $val = is_object( $m ) ? ( $m->value ?? null ) : ( is_array( $m ) ? ( $m['value'] ?? $m ) : $m );
+                if ( is_array( $val ) ) {
+                    $messages[] = $val;
+                }
             }
             foreach ( $order->get_meta( '_cpn_messages', false ) as $m ) {
-                $old[] = $m->value;
+                $val = is_object( $m ) ? ( $m->value ?? null ) : ( is_array( $m ) ? ( $m['value'] ?? $m ) : $m );
+                if ( is_array( $val ) ) {
+                    $old[] = $val;
+                }
             }
         }
 

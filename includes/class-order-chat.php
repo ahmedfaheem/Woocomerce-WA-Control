@@ -53,33 +53,38 @@ class WAMC_CRM {
     // ── Meta Box ──────────────────────────────────────────────────────────────
 
     public static function add_meta_box(): void {
-        global $pagenow, $post;
-        if ( $pagenow !== 'post.php' || ! isset( $post ) || $post->post_type !== 'shop_order' ) {
-            return;
-        }
+        $screens = [ 'shop_order', 'woocommerce_page_wc-orders' ];
 
         $wa_icon = '<svg xmlns="http://www.w3.org/2000/svg" height="22" width="22" viewBox="0 0 448 512" style="vertical-align:middle;margin-left:6px"><path fill="#25D366" d="M380.9 97.1C339 55.1 283.2 32 223.9 32c-122.4 0-222 99.6-222 222 0 39.1 10.2 77.3 29.6 111L0 480l117.7-30.9c32.4 17.7 68.9 27 106.1 27h.1c122.3 0 224.1-99.6 224.1-222 0-59.3-25.2-115-67.1-157zm-157 341.6c-33.2 0-65.7-8.9-94-25.7l-6.7-4-69.8 18.3L72 359.2l-4.4-7c-18.5-29.4-28.2-63.3-28.2-98.2 0-101.7 82.8-184.5 184.6-184.5 49.3 0 95.6 19.2 130.4 54.1 34.8 34.9 56.2 81.2 56.1 130.5 0 101.8-84.9 184.6-186.6 184.6zm101.2-138.2c-5.5-2.8-32.8-16.2-37.9-18-5.1-1.9-8.8-2.8-12.5 2.8-3.7 5.6-14.3 18-17.6 21.8-3.2 3.7-6.5 4.2-12 1.4-32.6-16.3-54-29.1-75.5-66-5.7-9.8 5.7-9.1 16.3-30.3 1.8-3.7 .9-6.9-.5-9.7-1.4-2.8-12.5-30.1-17.1-41.2-4.5-10.8-9.1-9.3-12.5-9.5-3.2-.2-6.9-.2-10.6-.2-3.7 0-9.7 1.4-14.8 6.9-5.1 5.6-19.4 19-19.4 46.3 0 27.3 19.9 53.7 22.6 57.4 2.8 3.7 39.1 59.7 94.8 83.8 35.2 15.2 49 16.5 66.6 13.9 10.7-1.6 32.8-13.4 37.4-26.4 4.6-13 4.6-24.1 3.2-26.4-1.3-2.5-5-3.9-10.5-6.6z"/></svg>';
 
-        add_meta_box(
-            'wamc_crm_meta_box',
-            $wa_icon . '<span style="margin-right:8px;font-size:17px">WhatsApp</span>',
-            [ __CLASS__, 'render_meta_box' ],
-            'shop_order',
-            'normal',
-            'high'
-        );
+        foreach ( $screens as $scr ) {
+            add_meta_box(
+                'wamc_crm_meta_box',
+                $wa_icon . '<span style="margin-right:8px;font-size:17px">WhatsApp</span>',
+                [ __CLASS__, 'render_meta_box' ],
+                $scr,
+                'normal',
+                'high'
+            );
+        }
     }
-
     // ── Enqueue ───────────────────────────────────────────────────────────────
 
     public static function enqueue( string $hook ): void {
-        global $pagenow, $post_type;
+        global $pagenow;
 
-        $is_order_list = ( $hook === 'edit.php' && isset( $_GET['post_type'] ) && $_GET['post_type'] === 'shop_order' );
-        $is_order_edit = ( $pagenow === 'post.php' && isset( $_GET['action'] ) && $_GET['action'] === 'edit' );
+        $is_order_list = ( $hook === 'edit.php' && isset( $_GET['post_type'] ) && $_GET['post_type'] === 'shop_order' )
+            || ( $hook === 'woocommerce_page_wc-orders' && ! isset( $_GET['action'] ) );
+        $is_order_edit = ( $pagenow === 'post.php' && isset( $_GET['action'] ) && $_GET['action'] === 'edit' )
+            || ( $hook === 'woocommerce_page_wc-orders' && isset( $_GET['action'] ) && $_GET['action'] === 'edit' );
 
         if ( ! $is_order_list && ! $is_order_edit ) {
             return;
+        }
+
+        $pusher_key = trim( (string) wamc_setting( 'pusher_key', '' ) );
+        if ( $pusher_key !== '' ) {
+            wp_enqueue_script( 'pusher-js', 'https://js.pusher.com/8.2.0/pusher.min.js', [], '8.2.0', true );
         }
 
         wp_enqueue_script( 'jquery' );
@@ -95,7 +100,7 @@ class WAMC_CRM {
 
     public static function render_notification_popup(): void {
         $screen = get_current_screen();
-        if ( ! $screen || $screen->id !== 'edit-shop_order' ) {
+        if ( ! $screen || ! in_array( $screen->id, [ 'edit-shop_order', 'woocommerce_page_wc-orders' ], true ) ) {
             return;
         }
 
@@ -145,7 +150,9 @@ class WAMC_CRM {
     }
 
     private static function popup_js(): string {
-        $nonce = wp_create_nonce( 'wamc_nonce' );
+        $nonce          = wp_create_nonce( 'wamc_nonce' );
+        $pusher_key     = esc_js( trim( (string) wamc_setting( 'pusher_key', '' ) ) );
+        $pusher_cluster = esc_js( trim( (string) wamc_setting( 'pusher_cluster', 'eu' ) ) ?: 'eu' );
         return "
         jQuery(document).ready(function(\$){
             var open = false;
@@ -157,6 +164,11 @@ class WAMC_CRM {
             function loadNotifs(){
                 \$.post(ajaxurl, {action:'wamc_crm_check_notifications', _ajax_nonce:'$nonce'}, function(r){
                     if(!r.success || !r.data.length){ \$('.wamc-notif-popup').hide(); \$('.wamc-notif-list').hide(); return; }
+                    \$('.wamc-notif-popup').css('display','flex');
+                    var total = r.data.length;
+                    var badge = \$('.wamc-notif-badge');
+                    if(badge.length){ badge.text(total); }
+                    else { \$('.wamc-notif-popup').append('<span class=\"wamc-notif-badge\">'+total+'</span>'); }
                     \$('.wamc-notif-list').html('');
                     r.data.forEach(function(n){
                         \$('.wamc-notif-list').append('<a class=\"wamc-notif-item\" href=\"post.php?post='+n.order_id+'&action=edit\">' + n.message + '</a>');
@@ -164,6 +176,13 @@ class WAMC_CRM {
                 });
             }
             loadNotifs();
+            if('$pusher_key' !== '' && typeof Pusher !== 'undefined'){
+                try {
+                    var p = new Pusher('$pusher_key', { cluster: '$pusher_cluster', forceTLS: true });
+                    var ch = p.subscribe('wamc-notifications');
+                    ch.bind('new_notification', function(){ loadNotifs(); });
+                } catch(e){}
+            }
         });
         ";
     }
@@ -210,6 +229,9 @@ class WAMC_CRM {
     // ── AJAX: refresh messages HTML ────────────────────────────────────────────
 
     public static function ajax_refresh_messages(): void {
+        if ( session_status() === PHP_SESSION_ACTIVE ) {
+            session_write_close();
+        }
         check_ajax_referer( 'wamc_nonce', 'nonce' );
         $post_id = intval( $_POST['post_id'] ?? 0 );
         if ( ! $post_id ) {
@@ -229,6 +251,9 @@ class WAMC_CRM {
     // ── AJAX: poll for new message ─────────────────────────────────────────────
 
     public static function ajax_check_new_message(): void {
+        if ( session_status() === PHP_SESSION_ACTIVE ) {
+            session_write_close();
+        }
         check_ajax_referer( 'wamc_nonce', '_ajax_nonce' );
         $order_id = intval( $_POST['order_id'] ?? 0 );
         if ( ! $order_id ) {
@@ -238,7 +263,11 @@ class WAMC_CRM {
         $new = get_transient( 'wamc_new_msg_' . $order_id );
         if ( $new ) {
             delete_transient( 'wamc_new_msg_' . $order_id );
-            wp_send_json_success( [ 'new_message' => true ] );
+            global $wpdb;
+            $wpdb->delete( $wpdb->prefix . 'wamc_notifications', [ 'order_id' => $order_id ], [ '%d' ] );
+            ob_start();
+            self::render_messages( $order_id );
+            wp_send_json_success( [ 'new_message' => true, 'html' => ob_get_clean() ] );
         } else {
             wp_send_json_success( [ 'new_message' => false ] );
         }
@@ -247,6 +276,9 @@ class WAMC_CRM {
     // ── AJAX: send message from order editor ───────────────────────────────────
 
     public static function ajax_send_message(): void {
+        if ( session_status() === PHP_SESSION_ACTIVE ) {
+            session_write_close();
+        }
         if ( ! current_user_can( 'manage_woocommerce' ) ) {
             wp_send_json_error( [ 'message' => 'Unauthorized' ] );
         }
@@ -267,11 +299,13 @@ class WAMC_CRM {
         $result = wamc_api()->send_message( $phone, $message );
 
         if ( isset( $result['error'] ) ) {
-            wp_send_json_error( [ 'message' => $result['error'] ] );
+            $err_str = is_array( $result['error'] ) ? ( $result['error']['message'] ?? wp_json_encode( $result['error'] ) ) : (string) $result['error'];
+            if ( strpos( $err_str, '131047' ) !== false || strpos( $err_str, '24 hours' ) !== false ) {
+                $err_str = 'نافذة الـ 24 ساعة مغلقة مع هذا العميل (لا يمكن إرسال نص حر إلا بعد أن يبدأ العميل بمراسلتك أولاً).';
+            }
+            wp_send_json_error( [ 'message' => $err_str ] );
         }
 
-        // Meta accepted the message and returned an ID → it will be delivered.
-        // (Non-WhatsApp numbers are rejected by the API call itself, or reported later via webhook.)
         $is_delivered = ! empty( $result['data']['id'] );
 
         if ( ! $is_delivered ) {
@@ -284,7 +318,13 @@ class WAMC_CRM {
             'timestamp' => current_time( 'mysql' ),
         ] );
 
-        wp_send_json_success( [ 'message' => 'تم الإرسال بنجاح' ] );
+        ob_start();
+        self::render_messages( $order_id );
+        $html = ob_get_clean();
+
+        self::push_order_update( $order_id, $html );
+
+        wp_send_json_success( [ 'message' => 'تم الإرسال بنجاح', 'html' => $html ] );
     }
 
     // ── Mark Read on Order Edit ────────────────────────────────────────────────
@@ -309,10 +349,27 @@ class WAMC_CRM {
 
     // ── Render Meta Box ────────────────────────────────────────────────────────
 
-    public static function render_meta_box( WP_Post $post ): void {
-        $order_id = $post->ID;
-        $nonce    = wp_create_nonce( 'wamc_nonce' );
+    public static function render_meta_box( $post_or_order = null ): void {
+        $order_id = is_numeric( $post_or_order ) ? (int) $post_or_order : ( $post_or_order instanceof \WC_Order ? $post_or_order->get_id() : ( $post_or_order->ID ?? 0 ) );
+        if ( ! $order_id ) { return; }
+        $nonce          = wp_create_nonce( 'wamc_nonce' );
+        $pusher_key     = trim( (string) wamc_setting( 'pusher_key', '' ) );
+        $pusher_cluster = trim( (string) wamc_setting( 'pusher_cluster', 'eu' ) ) ?: 'eu';
+        $settings_url   = admin_url( 'admin.php?page=wa-meta-settings' );
         ?>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px">
+            <?php if ( $pusher_key !== '' ) : ?>
+                <span id="wamc-ws-badge" style="color:#15803d;background:#dcfce7;padding:3px 8px;border-radius:12px;font-weight:600">
+                    ⚡ جاري الاتصال بالبث اللحظي (WebSocket)...
+                </span>
+            <?php else : ?>
+                <span style="color:#9a3412;background:#ffedd5;padding:3px 8px;border-radius:12px">
+                    ℹ️ لتفعيل التحديث اللحظي التلقائي (بدون Polling)، أضف مفاتيح Pusher المجانية في <a href="<?php echo esc_url( $settings_url ); ?>">إعدادات الإضافة</a>
+                </span>
+            <?php endif; ?>
+            <button type="button" id="wamc-crm-manual-refresh" class="button button-small" style="font-size:11px">↻ تحديث الشات</button>
+        </div>
+
         <div id="wamc-crm-messages" data-order-id="<?php echo $order_id; ?>"
              style="max-height:400px;overflow-y:auto;margin-bottom:12px">
             <?php self::render_messages( $order_id ); ?>
@@ -332,10 +389,11 @@ class WAMC_CRM {
 
         <script>
         (function($){
-            var orderId = <?php echo $order_id; ?>;
-            var nonce   = '<?php echo $nonce; ?>';
-            var ajax    = '<?php echo admin_url( 'admin-ajax.php' ); ?>';
-            var sseUrl  = '<?php echo esc_url( rest_url( 'wamc/v1/stream/' . $order_id ) ); ?>';
+            var orderId       = <?php echo $order_id; ?>;
+            var nonce         = '<?php echo esc_js( $nonce ); ?>';
+            var ajax          = '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+            var pusherKey     = '<?php echo esc_js( $pusher_key ); ?>';
+            var pusherCluster = '<?php echo esc_js( $pusher_cluster ); ?>';
 
             function scrollBottom(){
                 var c = document.getElementById('wamc-crm-messages');
@@ -343,42 +401,66 @@ class WAMC_CRM {
             }
             scrollBottom();
 
-            // ── Server-Sent Events — replace the old setInterval polling ──────
-            var evtSource = null;
-
-            function connectSSE(){
-                if( evtSource ){
-                    evtSource.close();
-                }
-
-                evtSource = new EventSource( sseUrl );
-
-                // New message received — server already rendered the HTML
-                evtSource.addEventListener('new_message', function(e){
-                    var payload = JSON.parse(e.data);
-                    if( payload.html ){
-                        $('#wamc-crm-messages').html( payload.html );
+            function refreshChat(){
+                $.post(ajax, {action:'wamc_crm_refresh_messages', nonce:nonce, post_id:orderId}, function(r){
+                    if(r && r.success && r.data && r.data.html){
+                        $('#wamc-crm-messages').html(r.data.html);
                         scrollBottom();
                     }
                 });
-
-                // Heartbeat (45s cycle) — EventSource auto-reconnects, no action needed
-                evtSource.addEventListener('heartbeat', function(){
-                    // connection will auto-reconnect
-                });
-
-                evtSource.onerror = function(){
-                    // On error the browser will automatically retry after ~3s
-                    // No manual reconnect needed
-                };
             }
 
-            connectSSE();
-
-            // Clean up when admin navigates away
-            window.addEventListener('beforeunload', function(){
-                if(evtSource) evtSource.close();
+            $('#wamc-crm-manual-refresh').on('click', function(){
+                var $btn = $(this).prop('disabled', true).text('...');
+                $.post(ajax, {action:'wamc_crm_refresh_messages', nonce:nonce, post_id:orderId}, function(r){
+                    if(r && r.success && r.data && r.data.html){
+                        $('#wamc-crm-messages').html(r.data.html);
+                        scrollBottom();
+                    }
+                }).always(function(){
+                    $btn.prop('disabled', false).text('↻ تحديث الشات');
+                });
             });
+
+            // ── Zero-Polling Real-Time WebSocket via Pusher Channels ──────────
+            function initPusher(){
+                if(!pusherKey) return;
+                if(typeof Pusher === 'undefined'){
+                    var s = document.createElement('script');
+                    s.src = 'https://js.pusher.com/8.2.0/pusher.min.js';
+                    s.onload = connectPusher;
+                    document.head.appendChild(s);
+                } else {
+                    connectPusher();
+                }
+            }
+
+            function connectPusher(){
+                try {
+                    var pusher = new Pusher(pusherKey, {
+                        cluster: pusherCluster,
+                        forceTLS: true
+                    });
+                    pusher.connection.bind('connected', function(){
+                        $('#wamc-ws-badge').text('🟢 متصل لحظياً (Real-Time)').css({color:'#15803d', background:'#dcfce7'});
+                    });
+                    pusher.connection.bind('error', function(){
+                        $('#wamc-ws-badge').text('⚠️ تعذر الاتصال بـ Pusher (تأكد من Key & Cluster)').css({color:'#b91c1c', background:'#fee2e2'});
+                    });
+                    var channel = pusher.subscribe('wamc-order-' + orderId);
+                    channel.bind('new_message', function(data){
+                        if(data && data.html){
+                            $('#wamc-crm-messages').html(data.html);
+                            scrollBottom();
+                            $.post(ajax, {action:'wamc_crm_delete_notification', order_id:orderId, _ajax_nonce:nonce});
+                        } else {
+                            refreshChat();
+                        }
+                    });
+                } catch(e){}
+            }
+
+            initPusher();
 
             // ── Send message ──────────────────────────────────────────────────
             $('#wamc-crm-send').on('click', function(){
@@ -393,10 +475,12 @@ class WAMC_CRM {
                     if(r.success){
                         $('#wamc-crm-status').text('✓ ' + r.data.message).css('color','#25D366');
                         $('#wamc-crm-text').val('');
-                        // Sent message → refresh immediately via AJAX (SSE only fires for received)
-                        $.post(ajax, {action:'wamc_crm_refresh_messages', nonce:nonce, post_id:orderId}, function(r2){
-                            if(r2.success){ $('#wamc-crm-messages').html(r2.data.html); scrollBottom(); }
-                        });
+                        if(r.data.html){
+                            $('#wamc-crm-messages').html(r.data.html);
+                            scrollBottom();
+                        } else {
+                            refreshChat();
+                        }
                     } else {
                         $('#wamc-crm-status').text('✗ ' + r.data.message).css('color','#e00');
                     }
@@ -482,5 +566,65 @@ class WAMC_CRM {
         ], [ '%d', '%s', '%s' ] );
 
         WAMC_Cache::flag_new_message( $order_id );
+        self::push_order_update( $order_id );
+    }
+
+    // ── Pusher Channels HTTP Trigger (Zero-Dependency Real-Time Push) ──────────
+
+    public static function push_order_update( int $order_id, string $pre_rendered_html = '' ): void {
+        $app_id = trim( (string) wamc_setting( 'pusher_app_id', '' ) );
+        $key    = trim( (string) wamc_setting( 'pusher_key', '' ) );
+        $secret = trim( (string) wamc_setting( 'pusher_secret', '' ) );
+
+        if ( $app_id === '' || $key === '' || $secret === '' ) {
+            return;
+        }
+
+        if ( $pre_rendered_html === '' ) {
+            ob_start();
+            self::render_messages( $order_id );
+            $pre_rendered_html = (string) ob_get_clean();
+        }
+
+        // Pusher event data limit is 10KB; send rendered HTML directly if under 7.5KB, otherwise signal client to fetch once
+        $payload = strlen( $pre_rendered_html ) < 7500
+            ? [ 'order_id' => $order_id, 'html' => $pre_rendered_html ]
+            : [ 'order_id' => $order_id, 'fetch' => true ];
+
+        self::trigger_pusher( 'wamc-order-' . $order_id, 'new_message', $payload );
+        self::trigger_pusher( 'wamc-notifications', 'new_notification', [ 'order_id' => $order_id ] );
+    }
+
+    public static function trigger_pusher( string $channel, string $event, array $payload ): void {
+        $app_id  = trim( (string) wamc_setting( 'pusher_app_id', '' ) );
+        $key     = trim( (string) wamc_setting( 'pusher_key', '' ) );
+        $secret  = trim( (string) wamc_setting( 'pusher_secret', '' ) );
+        $cluster = trim( (string) wamc_setting( 'pusher_cluster', 'eu' ) ) ?: 'eu';
+
+        if ( $app_id === '' || $key === '' || $secret === '' ) {
+            return;
+        }
+
+        $body = wp_json_encode( [
+            'name'    => $event,
+            'channel' => $channel,
+            'data'    => wp_json_encode( $payload ),
+        ] );
+
+        $body_md5  = md5( (string) $body );
+        $timestamp = time();
+        $path      = "/apps/{$app_id}/events";
+
+        // Query parameters MUST be in alphabetical order for Pusher HMAC signature
+        $query = "auth_key={$key}&auth_timestamp={$timestamp}&auth_version=1.0&body_md5={$body_md5}";
+        $sig   = hash_hmac( 'sha256', "POST\n{$path}\n{$query}", $secret );
+        $url   = "https://api-{$cluster}.pusher.com{$path}?{$query}&auth_signature={$sig}";
+
+        wp_remote_post( $url, [
+            'headers'  => [ 'Content-Type' => 'application/json' ],
+            'body'     => $body,
+            'timeout'  => 3,
+            'blocking' => false,
+        ] );
     }
 }

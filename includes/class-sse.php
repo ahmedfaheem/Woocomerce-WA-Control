@@ -52,65 +52,37 @@ class WAMC_SSE {
     // ── SSE Stream ────────────────────────────────────────────────────────────
 
     public static function stream( WP_REST_Request $request ): void {
+        if ( session_status() === PHP_SESSION_ACTIVE ) {
+            session_write_close();
+        }
+
         $order_id      = (int) $request->get_param( 'order_id' );
         $transient_key = 'wamc_new_msg_' . $order_id;
 
-        // ── Headers ──────────────────────────────────────────────────────────
-        // Disable all WordPress / server output buffering
         while ( ob_get_level() > 0 ) {
             ob_end_clean();
         }
 
-        // Required SSE headers
         header( 'Content-Type: text/event-stream; charset=UTF-8' );
         header( 'Cache-Control: no-cache, no-store, must-revalidate' );
-        header( 'X-Accel-Buffering: no' );   // Disable nginx buffering
-        header( 'Connection: keep-alive' );
+        header( 'X-Accel-Buffering: no' );
 
-        // Remove headers that would close/compress the stream
-        header_remove( 'Content-Encoding' );
-        header_remove( 'Content-Length' );
+        // Single non-blocking check — never hold a PHP-FPM worker or session lock in a sleep() loop
+        $has_new = get_transient( $transient_key );
+        if ( $has_new ) {
+            delete_transient( $transient_key );
+            ob_start();
+            WAMC_CRM::render_messages( $order_id );
+            $html = ob_get_clean();
 
-        // Unlimited execution time for this request
-        set_time_limit( 0 );
-        ignore_user_abort( false ); // Detect when browser closes the tab
-
-        // ── Hold Loop ─────────────────────────────────────────────────────────
-        $started = time();
-
-        while ( true ) {
-            // Browser closed the connection — stop immediately
-            if ( connection_aborted() ) {
-                exit;
-            }
-
-            // Time to reconnect cycle — send heartbeat and exit cleanly
-            if ( ( time() - $started ) >= self::MAX_HOLD ) {
-                self::send_event( 'heartbeat', [ 'ts' => time() ] );
-                exit;
-            }
-
-            // Check for a new incoming message
-            $has_new = get_transient( $transient_key );
-
-            if ( $has_new ) {
-                // Delete so it doesn't fire again on reconnect
-                delete_transient( $transient_key );
-
-                // Render the updated message bubbles HTML server-side
-                ob_start();
-                WAMC_CRM::render_messages( $order_id );
-                $html = ob_get_clean();
-
-                self::send_event( 'new_message', [
-                    'order_id' => $order_id,
-                    'html'     => $html,
-                ] );
-            }
-
-            // Wait before next check
-            sleep( self::CHECK_INTERVAL );
+            self::send_event( 'new_message', [
+                'order_id' => $order_id,
+                'html'     => $html,
+            ] );
+        } else {
+            self::send_event( 'heartbeat', [ 'ts' => time() ] );
         }
+        exit;
     }
 
     // ── SSE Frame Writer ──────────────────────────────────────────────────────

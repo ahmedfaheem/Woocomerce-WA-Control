@@ -56,6 +56,12 @@ class WAMC_Settings {
         $clean['template_name']      = sanitize_key( $input['template_name'] ?? '' );
         $clean['template_lang']      = sanitize_text_field( $input['template_lang'] ?? 'ar' );
 
+        // Pusher Channels Real-Time WebSocket (Zero-Polling Order Chat)
+        $clean['pusher_app_id']      = sanitize_text_field( $input['pusher_app_id'] ?? '' );
+        $clean['pusher_key']         = sanitize_text_field( $input['pusher_key'] ?? '' );
+        $clean['pusher_secret']      = sanitize_text_field( $input['pusher_secret'] ?? '' );
+        $clean['pusher_cluster']     = sanitize_text_field( $input['pusher_cluster'] ?? 'eu' ) ?: 'eu';
+
         // Confirmation — dual: plain text (window open) + template with buttons (window closed)
         $clean['confirm_message']       = sanitize_textarea_field( $input['confirm_message'] ?? '' );
         $clean['confirm_btn_label']     = sanitize_text_field( $input['confirm_btn_label'] ?? 'تأكيد الطلب' );
@@ -347,6 +353,42 @@ class WAMC_Settings {
                                 <td>
                                     <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[template_lang]" value="<?php echo esc_attr( wamc_setting( 'template_lang', 'ar') ); ?>" class="regular-text" autocomplete="off" />
                                     <p class="description"><?php esc_html_e( 'e.g. ar, en_US', 'wa-meta-control' ); ?></p>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- ═══ REAL-TIME WEBSOCKET (PUSHER CHANNELS) ═══════════════ -->
+                    <div class="wamc-card">
+                        <h2 class="wamc-card-title">⚡ <?php esc_html_e( 'Real-Time Chat WebSocket (Pusher Channels — بدون Polling)', 'wa-meta-control' ); ?></h2>
+                        <p class="description" style="margin:0 20px 16px;padding:8px 12px;background:#f0fff4;border-right:4px solid #25D366;border-radius:4px">
+                            🚀 <strong><?php esc_html_e( 'تحديث الشات لحظياً عند وصول الـ Webhook بدون أي ضغط على السيرفر (Zero Polling):', 'wa-meta-control' ); ?></strong><br>
+                            <?php esc_html_e( 'أنشئ حساباً مجانياً على pusher.com (خطة Sandbox المجانية تدعم 200,000 رسالة يومياً) ثم أنشئ Channels App والصق المفاتيح بالأسفل.', 'wa-meta-control' ); ?>
+                        </p>
+                        <table class="form-table wamc-table">
+                            <tr>
+                                <th><?php esc_html_e( 'Pusher App ID', 'wa-meta-control' ); ?></th>
+                                <td>
+                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[pusher_app_id]" value="<?php echo esc_attr( wamc_setting( 'pusher_app_id' ) ); ?>" class="regular-text" autocomplete="off" placeholder="e.g. 1789234" />
+                                </td>
+                            </tr>
+                            <tr>
+                                <th><?php esc_html_e( 'Pusher Key', 'wa-meta-control' ); ?></th>
+                                <td>
+                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[pusher_key]" value="<?php echo esc_attr( wamc_setting( 'pusher_key' ) ); ?>" class="regular-text" autocomplete="off" placeholder="e.g. a1b2c3d4e5f6g7h8i9j0" />
+                                </td>
+                            </tr>
+                            <tr>
+                                <th><?php esc_html_e( 'Pusher Secret', 'wa-meta-control' ); ?></th>
+                                <td>
+                                    <input type="password" name="<?php echo WAMC_OPTION_KEY; ?>[pusher_secret]" value="<?php echo esc_attr( wamc_setting( 'pusher_secret' ) ); ?>" class="regular-text" autocomplete="off" />
+                                </td>
+                            </tr>
+                            <tr>
+                                <th><?php esc_html_e( 'Pusher Cluster', 'wa-meta-control' ); ?></th>
+                                <td>
+                                    <input type="text" name="<?php echo WAMC_OPTION_KEY; ?>[pusher_cluster]" value="<?php echo esc_attr( wamc_setting( 'pusher_cluster', 'eu' ) ); ?>" class="regular-text" style="max-width:140px" autocomplete="off" placeholder="eu" />
+                                    <p class="description"><?php esc_html_e( 'e.g. eu, ap1, ap2, us2, mt1', 'wa-meta-control' ); ?></p>
                                 </td>
                             </tr>
                         </table>

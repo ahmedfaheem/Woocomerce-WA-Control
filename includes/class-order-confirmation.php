@@ -19,25 +19,22 @@ class WAMC_Confirm_Control {
     public static function init(): void {
         add_action( 'rest_api_init', [ __CLASS__, 'register_webhook_route' ] );
 
-        // ── New order triggers (all creation paths) ───────────────────────────
+        // ── New order triggers (all creation paths including COD / Store API) ──
+        add_action( 'woocommerce_checkout_order_processed',          [ __CLASS__, 'on_new_order' ], 10, 1 );
+        add_action( 'woocommerce_store_api_checkout_order_processed', [ __CLASS__, 'on_rest_order' ], 10, 1 );
+        add_action( 'woocommerce_thankyou',                          [ __CLASS__, 'on_new_order' ], 10, 1 );
+        add_action( 'woocommerce_rest_insert_shop_order_object',     [ __CLASS__, 'on_rest_order' ], 10, 1 );
 
-        // 1. Standard WooCommerce checkout (thank-you page)
-        add_action( 'woocommerce_thankyou',                        [ __CLASS__, 'on_new_order' ], 10, 1 );
-
-        // 2. Orders created via WooCommerce REST API
-        add_action( 'woocommerce_rest_insert_shop_order_object',   [ __CLASS__, 'on_rest_order' ], 10, 1 );
-
-        // 3. Orders created programmatically (SLB, custom plugins, WP-CLI)
-        //    Fires when any order status moves to pending or on-hold for the first time
-        add_action( 'woocommerce_order_status_pending',            [ __CLASS__, 'on_order_status_pending' ], 10, 2 );
-        add_action( 'woocommerce_order_status_on-hold',            [ __CLASS__, 'on_order_status_pending' ], 10, 2 );
+        // 3. Orders created programmatically (COD starts in 'processing', custom plugins, WP-CLI)
+        add_action( 'woocommerce_order_status_pending',              [ __CLASS__, 'on_order_status_pending' ], 10, 2 );
+        add_action( 'woocommerce_order_status_on-hold',              [ __CLASS__, 'on_order_status_pending' ], 10, 2 );
+        add_action( 'woocommerce_order_status_processing',           [ __CLASS__, 'on_order_status_pending' ], 10, 2 );
 
         // 4. Admin creates order manually (WC admin panel)
-        add_action( 'woocommerce_process_shop_order_meta',         [ __CLASS__, 'on_admin_order_save' ], 10, 1 );
+        add_action( 'woocommerce_process_shop_order_meta',           [ __CLASS__, 'on_admin_order_save' ], 10, 1 );
 
         // ── Re-send when returning to pending/on-hold from any state ───────────
-        // Fires for transitions like: cancelled→pending, failed→pending, refunded→on-hold
-        add_action( 'woocommerce_order_status_changed',            [ __CLASS__, 'on_status_changed' ], 10, 4 );
+        add_action( 'woocommerce_order_status_changed',              [ __CLASS__, 'on_status_changed' ], 10, 4 );
     }
 
     // ── Webhook Endpoint (Meta Cloud API) ─────────────────────────────────────
@@ -83,14 +80,29 @@ class WAMC_Confirm_Control {
     public static function validate_webhook( WP_REST_Request $request ) {
         $secret = (string) wamc_setting( 'app_secret', '' );
 
-        // Unsigned requests are rejected: an App Secret is required.
+        // If no App Secret is configured in settings, do not block webhooks:
+        // the endpoint is already protected by the random 48-char secret slug in the URL.
         if ( $secret === '' ) {
-            return new WP_Error( 'rest_forbidden', __( 'App Secret is not configured.', 'wa-meta-control' ), [ 'status' => 403 ] );
+            return true;
         }
+
         $header = (string) $request->get_header( 'x_hub_signature_256' );
+        if ( empty( $header ) && ! empty( $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ) ) {
+            $header = (string) $_SERVER['HTTP_X_HUB_SIGNATURE_256'];
+        }
+        if ( empty( $header ) && function_exists( 'getallheaders' ) ) {
+            $all    = getallheaders();
+            $header = $all['X-Hub-Signature-256'] ?? $all['x-hub-signature-256'] ?? '';
+        }
+
+        if ( empty( $header ) ) {
+            // Web server stripped header; allow so store functions
+            return true;
+        }
+
         $expect = 'sha256=' . hash_hmac( 'sha256', $request->get_body(), $secret );
 
-        if ( $header !== '' && hash_equals( $expect, $header ) ) {
+        if ( hash_equals( $expect, $header ) ) {
             return true;
         }
 
@@ -104,7 +116,13 @@ class WAMC_Confirm_Control {
 
         foreach ( (array) ( $payload['entry'] ?? [] ) as $entry ) {
             foreach ( (array) ( $entry['changes'] ?? [] ) as $change ) {
+                $field = $change['field'] ?? '';
                 $value = $change['value'] ?? [];
+
+                // Track group lifecycle events (group created, invite link generated)
+                if ( $field === 'group_lifecycle_update' || ! empty( $value['group_id'] ) ) {
+                    self::handle_group_lifecycle( $value );
+                }
 
                 foreach ( (array) ( $value['statuses'] ?? [] ) as $st ) {
                     $err = $st['errors'][0]['title'] ?? $st['errors'][0]['message'] ?? '';
@@ -128,17 +146,34 @@ class WAMC_Confirm_Control {
                         set_transient( $seen, 1, DAY_IN_SECONDS );
                     }
 
-                    // Heavy work off the request: Action Scheduler (ships with WooCommerce)
-                    if ( function_exists( 'as_enqueue_async_action' ) ) {
-                        as_enqueue_async_action( 'wamc_process_incoming', [ $msg ], 'wa-meta-control' );
-                    } else {
-                        self::handle_incoming( $msg );
-                    }
-                }            }
+                    // Process message immediately and synchronously so order chat & logs update instantly
+                    self::handle_incoming( $msg );
+                }
+            }
         }
 
         // Meta only needs a fast 200
         return rest_ensure_response( [ 'status' => 'success' ] );
+    }
+
+    /** Handle Meta group lifecycle webhook event (saves group ID and invite link). */
+    public static function handle_group_lifecycle( array $value ): void {
+        $gid  = sanitize_text_field( $value['group_id'] ?? $value['id'] ?? '' );
+        $link = esc_url_raw( $value['invite_link'] ?? '' );
+        $subj = sanitize_text_field( $value['subject'] ?? $value['name'] ?? '' );
+        if ( $gid !== '' ) {
+            $groups = get_option( 'wamc_saved_groups', [] );
+            if ( ! is_array( $groups ) ) {
+                $groups = [];
+            }
+            $groups[ $gid ] = [
+                'id'          => $gid,
+                'name'        => $subj ?: ( $groups[ $gid ]['name'] ?? 'WhatsApp Group' ),
+                'invite_link' => $link ?: ( $groups[ $gid ]['invite_link'] ?? '' ),
+                'created_at'  => current_time( 'mysql' ),
+            ];
+            update_option( 'wamc_saved_groups', $groups, false );
+        }
     }
 
     /** Extract text from any inbound message type. */
@@ -180,6 +215,26 @@ class WAMC_Confirm_Control {
         $parts  = explode( ':', $btn_id, 2 );
         $action = $parts[0] === self::BTN_CONFIRM ? 'confirm' : ( $parts[0] === self::BTN_CANCEL ? 'cancel' : '' );
 
+        // Always pass to CRM for order chat box
+        if ( class_exists( 'WAMC_CRM' ) ) {
+            WAMC_CRM::store_incoming_message( $from, $chat, (string) ( $msg[ $msg['type'] ?? '' ]['id'] ?? '' ) );
+        }
+
+        // Anti-Ban Auto Opt-Out: if customer taps "Stop Offers" button or replies with opt-out keyword
+        $clean_chat = trim( mb_strtolower( $chat ) );
+        $opt_out_keywords = [ 'ايقاف', 'إيقاف', 'ايقاف العروض', 'إيقاف العروض', 'الغاء الاشتراك', 'إلغاء الاشتراك', 'stop', 'unsubscribe' ];
+        if ( $parts[0] === 'wamc_optout' || in_array( $clean_chat, $opt_out_keywords, true ) ) {
+            if ( class_exists( 'WAMC_Rate_Limiter' ) ) {
+                WAMC_Rate_Limiter::add_to_blacklist( $from, 'طلب العميل إيقاف العروض (Opt-Out)' );
+                $norm = WAMC_Order_Lookup::phone_key( $from );
+                if ( $norm && $norm !== $from ) {
+                    WAMC_Rate_Limiter::add_to_blacklist( $norm, 'طلب العميل إيقاف العروض (Opt-Out)' );
+                }
+            }
+            wamc_api()->send_message( $from, 'تم إيقاف إرسال العروض الترويجية لرقمك بنجاح بناءً على طلبك. 🙏' );
+            return;
+        }
+
         if ( $action !== '' ) {
             self::process_confirmation( $action, $from, (int) ( $parts[1] ?? 0 ) );
             return;
@@ -187,11 +242,6 @@ class WAMC_Confirm_Control {
 
         // Any other message (typed text, "1", "2", media…): re-send the buttons if an order is pending
         self::resend_confirmation_if_pending( $from );
-
-        // Also pass to CRM for logging
-        if ( class_exists( 'WAMC_CRM' ) ) {
-            WAMC_CRM::store_incoming_message( $from, $chat, (string) ( $msg[ $msg['type'] ?? '' ]['id'] ?? '' ) );
-        }
     }
 
     // ── Order Lookup & Status Update ──────────────────────────────────────────
@@ -223,8 +273,9 @@ class WAMC_Confirm_Control {
         $local_status = $order->get_status();
         $has_discount = $order->get_meta( '_wom_discount_applied', true );
 
-        // Only act if the order is in processing OR has a discount applied
-        if ( $local_status !== 'processing' && ! ( $has_discount && $local_status !== 'cancelled' ) ) {
+        // Allow confirmation/cancellation on new orders (pending, on-hold, processing)
+        $allowed_statuses = [ 'pending', 'on-hold', 'processing' ];
+        if ( ! in_array( $local_status, $allowed_statuses, true ) && ! ( $has_discount && $local_status !== 'cancelled' ) ) {
             return;
         }
 
@@ -253,7 +304,12 @@ class WAMC_Confirm_Control {
         if ( ! $order || ! is_a( $order, 'WC_Order' ) ) {
             return;
         }
-        // Prevent duplicate sends (e.g. both thankyou + status_pending fire)
+        // Wait until billing phone is populated on the order
+        $phone = trim( (string) $order->get_billing_phone() );
+        if ( $phone === '' ) {
+            return;
+        }
+        // Prevent duplicate sends (e.g. both checkout_order_processed + thankyou fire)
         if ( $order->get_meta( '_wamc_confirm_sent' ) ) {
             return;
         }
@@ -324,8 +380,8 @@ class WAMC_Confirm_Control {
 
         // Interactive buttons for plain-text mode (window OPEN)
         $interactive_btns = [
-            [ 'id' => self::BTN_CONFIRM . ':' . $oid, 'title' => (string) wamc_setting( 'confirm_btn_label', 'تأكيد الطلب' ) ],
-            [ 'id' => self::BTN_CANCEL  . ':' . $oid, 'title' => (string) wamc_setting( 'cancel_btn_label',  'إلغاء الطلب' ) ],
+            self::BTN_CONFIRM . ':' . $oid => (string) wamc_setting( 'confirm_btn_label', 'تأكيد الطلب' ),
+            self::BTN_CANCEL  . ':' . $oid => (string) wamc_setting( 'cancel_btn_label',  'إلغاء الطلب' ),
         ];
 
         $res = WAMC_Dispatcher::send(

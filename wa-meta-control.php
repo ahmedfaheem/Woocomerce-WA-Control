@@ -93,22 +93,26 @@ add_action( 'plugins_loaded', function () {
     WAMC_Admin_Page::init();
     WAMC_SSE::init();
 
-    if ( wamc_setting( 'enable_confirm', '1' ) ) {
+    // Always register background job hooks so WP-Cron / Action Scheduler can execute them
+    add_action( 'wamc_send_single_promo',  [ 'WAMC_Bulk_Send', 'process_single_promo' ], 10, 2 );
+    add_action( 'process_wamc_bulk_batch', [ 'WAMC_Bulk_Send', 'process_batch' ] );
+
+    if ( wamc_setting( 'enable_confirm', '1' ) === '1' ) {
         WAMC_Confirm_Control::init();
     } else {
         // Webhook must stay reachable for Meta verification, statuses and the chat log
         add_action( 'rest_api_init', [ 'WAMC_Confirm_Control', 'register_webhook_route' ] );
     }
-    if ( wamc_setting( 'enable_order_notify', '1' ) ) {
+    if ( wamc_setting( 'enable_order_notify', '1' ) === '1' ) {
         WAMC_Order_Notify::init();
     }
-    if ( wamc_setting( 'enable_crm', '1' ) ) {
+    if ( wamc_setting( 'enable_crm', '1' ) === '1' ) {
         WAMC_CRM::init();
     }
-    if ( wamc_setting( 'enable_qp_notify', '1' ) ) {
+    if ( wamc_setting( 'enable_qp_notify', '1' ) === '1' ) {
         WAMC_QP_Notify::init();
     }
-    if ( wamc_setting( 'enable_bulk', '1' ) ) {
+    if ( wamc_setting( 'enable_bulk', '1' ) === '1' ) {
         WAMC_Bulk_Send::init();
     }
 } );

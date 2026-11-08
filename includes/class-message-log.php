@@ -36,6 +36,33 @@ class WAMC_Message_Log {
         update_option( self::OPTION, array_slice( $log, 0, self::MAX ), false );
     }
 
+    /**
+     * Enrich the most recent log entry created by WAMC_Meta_Client::post_message()
+     * instead of inserting a duplicate row in the log table.
+     */
+    public static function enrich_latest_or_add( string $dir, array $entry ): void {
+        $log = self::all();
+        if ( ! empty( $log ) && ( $log[0]['dir'] ?? '' ) === $dir ) {
+            $same_id = ! empty( $entry['id'] ) && ( $log[0]['id'] ?? '' ) === $entry['id'];
+            $same_to = ! empty( $entry['to'] ) && ( $log[0]['to'] ?? '' ) === $entry['to'];
+            if ( $same_id || $same_to ) {
+                // Preserve any webhook status update (e.g. 'read' / 'delivered' / 'failed') that already arrived
+                $existing_status = $log[0]['status'] ?? '';
+                $existing_error  = $log[0]['error'] ?? '';
+                $log[0]          = array_merge( $log[0], $entry );
+                if ( in_array( $existing_status, [ 'delivered', 'read', 'failed' ], true ) ) {
+                    $log[0]['status'] = $existing_status;
+                }
+                if ( $existing_error !== '' && empty( $log[0]['error'] ) ) {
+                    $log[0]['error'] = $existing_error;
+                }
+                update_option( self::OPTION, $log, false );
+                return;
+            }
+        }
+        self::add( $dir, $entry );
+    }
+
     public static function update_status( string $id, string $status, string $error = '' ): void {
         if ( $id === '' ) {
             return;
