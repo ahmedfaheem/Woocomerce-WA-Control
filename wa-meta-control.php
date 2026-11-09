@@ -5,8 +5,10 @@
  * Description:  Unified WhatsApp control panel using the Meta WhatsApp Cloud API directly — order confirmation, order chat, bulk messaging, shipping notifications, and a full WP Admin settings page.
  * Version:      3.0.0
  * Text Domain:  wa-meta-control
- * Author:       Charoon
+ * Author:       Ahmed Faheem
  * Author URI:   https://www.facebook.com/a7medfaheem
+ * License:      Proprietary / All Rights Reserved
+ * Copyright:    (c) 2026 Ahmed Faheem
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * WC requires at least: 5.0
